@@ -63,6 +63,7 @@ export default function Home() {
     setTrainingPlan(null)
 
     try {
+      // Send video file directly as FormData (no frame extraction needed)
       const formData = new FormData()
       formData.append('video', videoFile)
       formData.append('name', profile.name)
@@ -75,8 +76,12 @@ export default function Home() {
       })
 
       if (!res.ok) {
-        const errData = await res.json()
-        throw new Error(errData.error || 'Analysis failed')
+        let errMsg = 'Analysis failed'
+        try {
+          const errData = await res.json()
+          errMsg = errData.error || errMsg
+        } catch { /* response wasn't JSON */ }
+        throw new Error(errMsg)
       }
 
       const data = await res.json()
@@ -340,6 +345,7 @@ export default function Home() {
               {analysis ? (
                 <AnalysisView
                   analysis={analysis}
+                  playerName={profile.name}
                   onGeneratePlan={handleGeneratePlan}
                   isGenerating={isGeneratingPlan}
                   onReset={handleReset}
@@ -500,11 +506,13 @@ export default function Home() {
 
 function AnalysisView({
   analysis,
+  playerName,
   onGeneratePlan,
   isGenerating,
   onReset,
 }: {
   analysis: SpikeAnalysis
+  playerName: string
   onGeneratePlan: () => void
   isGenerating: boolean
   onReset: () => void
@@ -544,7 +552,7 @@ function AnalysisView({
             <div className="text-center sm:text-left flex-1">
               <Badge variant="secondary" className="mb-2">{analysis.estimatedLevel}</Badge>
               <h2 className="text-xl sm:text-2xl font-bold mb-1">
-                {profile.name ? `${profile.name}'s` : 'Your'} Spike Analysis
+                {playerName ? `${playerName}'s` : 'Your'} Spike Analysis
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
                 {analysis.coachNotes}
