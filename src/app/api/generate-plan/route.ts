@@ -107,7 +107,7 @@ Create a targeted 4-week plan. Prioritize the weakest phase(s) in Weeks 1-2, the
 
     const zai = await getZAI()
     const response = await zai.chat.completions.create({
-      model: 'default',
+      model: 'glm-4',
       messages: [
         { role: 'user', content: fullPrompt },
       ],

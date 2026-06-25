@@ -32,3 +32,26 @@ Stage Summary:
 - Two API routes: /api/analyze-spike (VLM) and /api/generate-plan (LLM)
 - Clean UI with shadcn/ui, framer-motion animations, responsive design
 - Sticky footer, semantic HTML, accessible
+
+---
+Task ID: 2
+Agent: Main
+Task: Fix "Unexpected token '<'" error when uploading and analyzing spike video
+
+Work Log:
+- Diagnosed error: the VLM API returns "图片输入格式/解析错误" for video base64 data URIs
+- Root cause 1: The z-ai-web-dev-sdk CLI treats ALL local files as images (only handles jpg/png/gif/webp MIME types)
+- Root cause 2: The VLM API does not accept base64-encoded video — it needs accessible URLs or image input
+- Root cause 3: CLI outputs emoji banner messages ("🚀 Initializing...") before JSON, breaking JSON.parse
+- Solution for analyze-spike: Extract key frames from video using ffmpeg, send frames as images to VLM via CLI
+- Added frame extraction pipeline: get video duration → calculate N evenly-spaced timestamps → extract JPEG frames → send to VLM
+- Added robust CLI output parsing: find `{"choices"` start index, strip emoji banners, regex fallback for content extraction
+- Verified generate-plan route works correctly with SDK chat.completions.create()
+- Both APIs tested via curl and return correct structured JSON
+- Lint passes clean, no console errors
+
+Stage Summary:
+- /api/analyze-spike now extracts frames via ffmpeg and sends to VLM as images (works around video base64 limitation)
+- /api/generate-plan uses SDK text chat (works correctly)
+- CLI output parsing handles emoji banners with JSON detection + regex fallback
+- Full end-to-end flow verified: video upload → frame extraction → VLM analysis → parsed results → training plan generation

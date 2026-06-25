@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import ZAI from 'z-ai-web-dev-sdk'
+import { execFile } from 'child_process'
+import { writeFile, unlink, mkdtemp, readFile, readdir } from 'fs/promises'
+import { tmpdir } from 'os'
+import path from 'path'
 import type { SpikeAnalysis, CheckpointScores } from '@/lib/spike-types'
 
-const ANALYSIS_PROMPT = `You are an expert volleyball biomechanics analyst. Analyze this video of a volleyball player performing a spike (approach, jump, hit, and landing).
+export const maxDuration = 120
+export const dynamic = 'force-dynamic'
 
-For each of the following 15 biomechanical checkpoints, rate the player's execution on a scale of 0-100:
+const ANALYSIS_PROMPT = `You are an expert volleyball biomechanics analyst. The following are KEY FRAMES extracted from a video of a volleyball player performing a spike (approach, jump, hit, and landing). The frames are in chronological order.
+
+Analyze these frames and for each of the 15 biomechanical checkpoints below, rate the player's execution on a scale of 0-100:
 - 0-25: Critical (major flaw, significant power loss or injury risk)
 - 26-50: Needs Work (noticeable issue affecting performance)
 - 51-75: Decent (acceptable but room for improvement)
@@ -71,27 +77,18 @@ Return your analysis as a JSON object with this EXACT structure (no markdown, no
     }
   },
   "topStrengths": [
-    "<checkpoint name>: <1 sentence explaining why it's good based on what you see>"
+    "<checkpoint name>: <1 sentence explaining why it is good based on what you see>"
   ],
   "topWeaknesses": [
-    "<checkpoint name>: <1-2 sentences explaining what's wrong and what to fix>"
+    "<checkpoint name>: <1-2 sentences explaining what is wrong and what to fix>"
   ],
-  "coachNotes": "<3-5 sentences of specific coaching advice based on what you actually observe in the video>",
+  "coachNotes": "<3-5 sentences of specific coaching advice based on what you actually observe in the video frames>",
   "estimatedLevel": "<one of: beginner|intermediate|advanced|elite>",
   "estimatedApproachSpeed": "<one of: slow|moderate|fast|explosive>",
   "overallPower": <0-100 number>
 }
 
-Be specific and reference what you actually see in the video. If the video quality or angle makes certain checkpoints hard to judge, use your best judgment based on what is visible. Return ONLY the JSON.`
-
-let zaiInstance: InstanceType<typeof ZAI> | null = null
-
-async function getZAI() {
-  if (!zaiInstance) {
-    zaiInstance = await ZAI.create()
-  }
-  return zaiInstance
-}
+Be specific and reference what you actually see. If frames make certain checkpoints hard to judge, use your best judgment. Return ONLY the JSON.`
 
 function clampScore(val: number): number {
   const n = typeof val === 'number' && !isNaN(val) ? val : 50
@@ -99,7 +96,6 @@ function clampScore(val: number): number {
 }
 
 function parseAndValidate(raw: string): SpikeAnalysis | null {
-  // Strip markdown code fences if present
   let cleaned = raw.trim()
   const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/)
   if (fenceMatch) {
@@ -109,7 +105,6 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
   try {
     const data = JSON.parse(cleaned)
 
-    // Validate scores
     const scoreKeys: (keyof CheckpointScores)[] = [
       'approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm',
       'arms_swing_back', 'vertical_jump_conversion', 'hip_shoulder_rotation',
@@ -122,7 +117,6 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
       scores[key] = clampScore(data.scores?.[key])
     }
 
-    // Calculate phase averages
     const approachKeys = ['approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm', 'arms_swing_back']
     const jumpKeys = ['vertical_jump_conversion', 'hip_shoulder_rotation', 'body_position_air']
     const contactKeys = ['bow_and_arrow', 'arm_swing_speed', 'contact_point', 'wrist_snap', 'contact_height']
@@ -164,7 +158,94 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
   }
 }
 
+/** Get video duration in seconds using ffprobe */
+function getVideoDuration(videoPath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    execFile('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      videoPath,
+    ], { timeout: 15_000 }, (error, stdout) => {
+      if (error) { reject(error); return }
+      resolve(parseFloat(stdout.trim()) || 3)
+    })
+  })
+}
+
+/** Extract N key frames from video at evenly spaced timestamps */
+function extractFrames(videoPath: string, outputDir: string, timestamps: number[]): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const args: string[] = []
+    for (const ts of timestamps) {
+      args.push('-ss', String(ts))
+    }
+    // For each timestamp, output a frame
+    const outputs: string[] = []
+    for (let i = 0; i < timestamps.length; i++) {
+      const outPath = path.join(outputDir, `frame_${i}.jpg`)
+      outputs.push(outPath)
+    }
+
+    // Use a single ffmpeg command with multiple outputs
+    const allArgs = [
+      '-i', videoPath,
+      '-q:v', '2',
+      ...args.flatMap((_, i) => [
+        '-ss', String(timestamps[i]),
+        '-frames:v', '1',
+        '-y', outputs[i],
+      ]),
+    ]
+
+    // Actually, multiple -ss after -i doesn't work well. Use separate commands.
+    const commands = timestamps.map((ts, i) => {
+      return new Promise<void>((res, rej) => {
+        execFile('ffmpeg', [
+          '-ss', String(ts),
+          '-i', videoPath,
+          '-frames:v', '1',
+          '-q:v', '2',
+          '-y', outputs[i],
+        ], { timeout: 15_000 }, (err) => {
+          if (err) rej(err); else res()
+        })
+      })
+    })
+
+    Promise.all(commands)
+      .then(() => resolve(outputs))
+      .catch(reject)
+  })
+}
+
+/** Read a file as base64 */
+async function fileToBase64(filePath: string): Promise<string> {
+  const buffer = await readFile(filePath)
+  return buffer.toString('base64')
+}
+
+/** Run z-ai vision CLI with multiple images */
+function runVisionCli(imagePaths: string[], prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const args = ['vision', '-p', prompt, '--thinking']
+    for (const imgPath of imagePaths) {
+      args.push('-i', imgPath)
+    }
+    const proc = execFile('z-ai', args, { timeout: 110_000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message))
+        return
+      }
+      resolve(stdout)
+    })
+  })
+}
+
 export async function POST(request: NextRequest) {
+  let tempDir = ''
+  let videoPath = ''
+
   try {
     const formData = await request.formData()
     const videoFile = formData.get('video') as File | null
@@ -173,51 +254,88 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No video file provided' }, { status: 400 })
     }
 
-    // Validate file type
     const validTypes = ['video/mp4', 'video/quicktime', 'video/avi', 'video/x-msvideo', 'video/webm', 'video/x-matroska']
     if (!validTypes.includes(videoFile.type) && !videoFile.name.match(/\.(mp4|mov|avi|webm|mkv)$/i)) {
       return NextResponse.json({ error: 'Invalid video format. Please upload MP4, MOV, AVI, or WebM.' }, { status: 400 })
     }
 
-    // Validate file size (50MB max)
     if (videoFile.size > 50 * 1024 * 1024) {
       return NextResponse.json({ error: 'Video file too large. Maximum size is 50MB.' }, { status: 400 })
     }
 
-    // Convert to base64
-    const bytes = await videoFile.arrayBuffer()
-    const base64 = Buffer.from(bytes).toString('base64')
-    const mimeType = videoFile.type || 'video/mp4'
-    const videoDataUri = `data:${mimeType};base64,${base64}`
+    // Save video to temp file
+    tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
+    const ext = videoFile.name.split('.').pop() || 'mp4'
+    videoPath = path.join(tempDir, `spike.${ext}`)
+    const bytes = Buffer.from(await videoFile.arrayBuffer())
+    await writeFile(videoPath, bytes)
 
-    // Get optional profile info for context
+    // Get video duration and extract key frames
+    const duration = await getVideoDuration(videoPath)
+    const frameCount = Math.max(3, Math.min(8, Math.ceil(duration))) // 3-8 frames
+    const timestamps: number[] = []
+    for (let i = 0; i < frameCount; i++) {
+      timestamps.push((duration * (i + 0.5)) / frameCount)
+    }
+
+    const framePaths = await extractFrames(videoPath, tempDir, timestamps)
+
+    // Verify frames were extracted
+    const validFrames: string[] = []
+    for (const p of framePaths) {
+      try {
+        const stat = await readFile(p)
+        if (stat.length > 100) validFrames.push(p)
+      } catch { /* skip */ }
+    }
+
+    if (validFrames.length === 0) {
+      return NextResponse.json({ error: 'Could not extract frames from video. Please try a different format.' }, { status: 400 })
+    }
+
     const playerName = formData.get('name') as string || 'the player'
     const position = formData.get('position') as string || 'Outside Hitter'
     const experience = formData.get('experience') as string || 'Intermediate'
 
-    const contextPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level.`
+    const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. The video is approximately ${Math.round(duration)} seconds long.`
 
-    // Call VLM with video
-    const zai = await getZAI()
-    const response = await zai.chat.completions.createVision({
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: contextPrompt },
-            { type: 'video_url', video_url: { url: videoDataUri } },
-          ],
-        },
-      ],
-      thinking: { type: 'enabled' },
-    })
+    // Run VLM analysis via CLI with extracted frames as images
+    const stdout = await runVisionCli(validFrames, fullPrompt)
 
-    const rawContent = response.choices?.[0]?.message?.content
-    if (!rawContent) {
-      return NextResponse.json({ error: 'AI analysis returned no content. Please try again with a clearer video.' }, { status: 500 })
+    // Parse CLI output — strip CLI banner messages, then extract JSON
+    let rawContent = ''
+    try {
+      // The CLI outputs emoji banners before the JSON. Find the JSON start.
+      const jsonStart = stdout.indexOf('{"choices"')
+      if (jsonStart >= 0) {
+        const jsonStr = stdout.substring(jsonStart)
+        const cliResponse = JSON.parse(jsonStr)
+        rawContent = cliResponse.choices?.[0]?.message?.content || ''
+      } else {
+        // Maybe the whole thing is the JSON (no banner)
+        const cliResponse = JSON.parse(stdout.trim())
+        rawContent = cliResponse.choices?.[0]?.message?.content || ''
+      }
+      console.log('[SpikeLab] VLM content length:', rawContent.length)
+    } catch {
+      console.error('[SpikeLab] Failed to parse CLI output')
+      // Try to find "content": "..." and extract it
+      const contentMatch = stdout.match(/"content"\s*:\s*"([\s\S]*?)(?:"\s*[,}]\s*$)/m)
+      if (contentMatch) {
+        rawContent = contentMatch[1]
+          .replace(/\\n/g, '\n')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\')
+      }
     }
 
-    // Parse and validate the response
+    if (!rawContent) {
+      return NextResponse.json(
+        { error: 'AI analysis returned no content. Please try again with a clearer video.' },
+        { status: 500 }
+      )
+    }
+
     const analysis = parseAndValidate(rawContent)
     if (!analysis) {
       console.error('Failed to parse AI response:', rawContent.substring(0, 500))
@@ -232,5 +350,16 @@ export async function POST(request: NextRequest) {
     console.error('Spike analysis error:', err)
     const message = err instanceof Error ? err.message : 'An unexpected error occurred during analysis'
     return NextResponse.json({ error: message }, { status: 500 })
+  } finally {
+    // Clean up temp files
+    try {
+      if (tempDir) {
+        const files = await readdir(tempDir).catch(() => [])
+        for (const f of files) {
+          await unlink(path.join(tempDir, f)).catch(() => {})
+        }
+        await unlink(tempDir).catch(() => {})
+      }
+    } catch { /* ignore cleanup errors */ }
   }
 }
