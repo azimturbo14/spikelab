@@ -55,3 +55,31 @@ Stage Summary:
 - /api/generate-plan uses SDK text chat (works correctly)
 - CLI output parsing handles emoji banners with JSON detection + regex fallback
 - Full end-to-end flow verified: video upload → frame extraction → VLM analysis → parsed results → training plan generation
+---
+Task ID: 3
+Agent: Main
+Task: Fix "generate plan is not working" — old cached frontend missing /api/analyze endpoint
+
+Work Log:
+- User reported "generate plan is not working for some reason"
+- Discovered CDN (Alibaba Cloud FC) has cached a PRODUCTION BUILD of the old slider-based page with s-maxage=31536000 (1 year)
+- The cached HTML references completely different JS chunks (production build format) vs dev server (Turbopack format)
+- The CDN ignores no-cache/no-store headers and serves stale content
+- Analyzed the old cached JS to understand its API contract: calls POST /api/analyze with {imageBase64, videoDescription, metrics, profile}
+- The old frontend generates training plans CLIENT-SIDE from slider values — no API call needed for plan generation
+- The "Get AI Coach Insight" button calls /api/analyze for optional AI text feedback
+- Root cause: /api/analyze endpoint was missing (renamed to /api/analyze-spike in previous session)
+- Created /api/analyze/route.ts that handles the old frontend's request format:
+  - Accepts metrics (slider values), optional imageBase64, optional videoDescription, and profile
+  - Uses LLM (glm-4) to generate AI coach insight from the metrics context
+  - Falls back to VLM analysis if an image is uploaded
+  - Returns { insight: "..." } matching the old frontend's expected response format
+- Also restructured page.tsx → SpikeApp.tsx to bust CDN chunk hashes (didn't work due to CDN edge cache)
+- Updated next.config.ts with serverExternalPackages: ['z-ai-web-dev-sdk']
+- Verified end-to-end: slider analysis works, AI insight works, 4-week training plan generates correctly
+
+Stage Summary:
+- Created /api/analyze/route.ts to support the old cached frontend's API contract
+- The old slider-based UI is fully functional: analysis, AI insight, and 4-week training plan all work
+- CDN caching issue identified but cannot be resolved (Alibaba Cloud edge cache with 1-year TTL, no purge access)
+- New video-first code (SpikeApp.tsx, /api/analyze-spike) is ready for when CDN cache expires
