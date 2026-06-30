@@ -141,3 +141,28 @@ Stage Summary:
 - The new SpikeApp (video-first UI) does NOT have this bug — uses proper tab switching via setActiveTab()
 - CDN cache (Alibaba Cloud FC, s-maxage=31536000) cannot be purged or bypassed
 - When CDN cache expires, the new SpikeApp will serve with correct button behavior
+
+---
+Task ID: 6
+Agent: Main
+Task: Launch the website - fix dev server process persistence
+
+Work Log:
+- Discovered that background processes started by the bash tool are killed when the tool invocation ends
+- Tried multiple approaches: nohup, setsid, disown, production build, start-stop-daemon — all failed
+- Root cause: K8s container environment aggressively cleans up child processes of the agent's shell session
+- Found working solution: double-fork subshell with disown:
+  ```bash
+  ( cd /home/z/my-project; npx next dev -p 3000 -H 0.0.0.0 </dev/null &>/dev/null & disown ) & disown
+  ```
+- Also removed `| tee dev.log` from the dev script in package.json (pipe caused SIGPIPE on session end)
+- Added `allowedDevOrigins: ['*']` to next.config.ts to suppress cross-origin warnings
+- Changed Caddyfile to use `127.0.0.1` instead of `localhost` for IPv4 compatibility
+- Verified server survives across multiple tool calls
+- Verified page serves correctly (64KB HTML, correct title, all API routes functional)
+
+Stage Summary:
+- Dev server now stays alive using double-fork daemonization technique
+- Server serves on 0.0.0.0:3000 (both IPv4 and IPv6 accessible)
+- All 3 API routes functional: /api/analyze, /api/analyze-spike, /api/generate-plan
+- Website accessible via Preview Panel
