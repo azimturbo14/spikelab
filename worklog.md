@@ -111,3 +111,33 @@ Stage Summary:
 - Training plan is generated instantly (no LLM) with 24 unique volleyball drills organized by phase
 - Both old frontend (via CDN) and new frontend (via dev server) have working workout generation
 - The new SpikeApp (video-first UI) is fully functional: upload → VLM analysis → LLM training plan
+
+---
+Task ID: 5
+Agent: Main
+Task: Investigate why user reports "generate plan is not working" despite plan being generated
+
+Work Log:
+- Opened the CDN-cached URL (f1hbc5f5qrv1-d.space-z.ai) in Agent Browser to see exactly what user sees
+- Confirmed old slider-based frontend loads with 15 sliders, all functional
+- Clicked "Analyze My Spike & Generate Plan" — analysis tab appears with all scores, no API calls made (100% client-side)
+- Clicked "See My 4-Week Training Plan" button — NOTHING HAPPENED (tab didn't switch)
+- Clicked "3. Training Plan" tab directly — FULL 4-WEEK PLAN APPEARS with real drills (Week 1-4, daily drills)
+- Inspected the button's React onClick handler via fiber tree:
+  `() => document.getElementById("plan-section")?.scrollIntoView({behavior: "smooth"})`
+- Confirmed `document.getElementById("plan-section")` returns NULL — the element doesn't exist
+- Root cause: The old cached frontend's "See My 4-Week Training Plan" button tries to scroll to a non-existent element
+- The training plan IS generated correctly — it's visible by clicking the "3. Training Plan" tab
+- Attempted CDN cache purge (PURGE, BAN methods) — CDN (Alibaba Cloud FC) doesn't support for this path
+- Attempted cache bypass with no-cache headers — CDN ignores all cache-busting headers
+- Attempted ?v=2 query parameter — CDN caches regardless of query params
+- Confirmed all JS chunks are also CDN-cached (404 from dev server)
+- Investigated Caddy proxy injection approach — not viable since CDN intercepts before origin
+
+Stage Summary:
+- **The training plan IS working** — the plan generates correctly with 4 weeks of real drills
+- Bug: "See My 4-Week Training Plan" button calls `scrollIntoView` on a non-existent `#plan-section` element
+- Workaround: Click the "3. Training Plan" TAB directly to see the full plan
+- The new SpikeApp (video-first UI) does NOT have this bug — uses proper tab switching via setActiveTab()
+- CDN cache (Alibaba Cloud FC, s-maxage=31536000) cannot be purged or bypassed
+- When CDN cache expires, the new SpikeApp will serve with correct button behavior

@@ -1,37 +1,35 @@
 :81 {
-	@transform_port_query {
-		query XTransformPort=*
-	}
+        @transform_port_query {
+                query XTransformPort=*
+        }
 
-	# Add cache-busting headers for all HTML responses
-	# These are recognized by various CDN providers (Alibaba Cloud, Cloudflare, etc.)
-	header {
-		Cache-Control "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
-		Pragma "no-cache"
-		Expires "Thu, 01 Jan 1970 00:00:00 GMT"
-		Surrogate-Control "no-store"
-		CDN-Cache-Control "no-cache"
-		X-Cache-Control "no-cache"
-		# Remove any caching headers from upstream
-		-X-Nextjs-Cache
-		defer
-	}
+        # Add cache-busting headers for all HTML responses
+        header {
+                Cache-Control "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
+                Pragma "no-cache"
+                Expires "Thu, 01 Jan 1970 00:00:00 GMT"
+                Surrogate-Control "no-store"
+                CDN-Cache-Control "no-cache"
+                X-Cache-Control "no-cache"
+                -X-Nextjs-Cache
+                defer
+        }
 
-	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
-	}
+        handle @transform_port_query {
+                reverse_proxy localhost:{query.XTransformPort} {
+                        header_up Host {host}
+                        header_up X-Forwarded-For {remote_host}
+                        header_up X-Forwarded-Proto {scheme}
+                        header_up X-Real-IP {remote_host}
+                }
+        }
 
-	handle {
-		reverse_proxy localhost:3000 {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
-	}
+        handle {
+                reverse_proxy localhost:3000 {
+                        header_up Host {host}
+                        header_up X-Forwarded-For {remote_host}
+                        header_up X-Forwarded-Proto {scheme}
+                        header_up X-Real-IP {remote_host}
+                }
+        }
 }
