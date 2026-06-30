@@ -83,3 +83,31 @@ Stage Summary:
 - The old slider-based UI is fully functional: analysis, AI insight, and 4-week training plan all work
 - CDN caching issue identified but cannot be resolved (Alibaba Cloud edge cache with 1-year TTL, no purge access)
 - New video-first code (SpikeApp.tsx, /api/analyze-spike) is ready for when CDN cache expires
+
+---
+Task ID: 4
+Agent: Main
+Task: Verify workout/training plan generation works end-to-end and enhance /api/analyze for old frontend compatibility
+
+Work Log:
+- Verified /api/analyze endpoint returns valid AI insight (~1-3s response time)
+- Verified /api/generate-plan endpoint returns full 4-week plan with specific drills (~40-60s via LLM)
+- Verified new SpikeApp UI renders correctly with no console errors in Agent Browser
+- Enhanced /api/analyze to return comprehensive data for maximum old frontend compatibility:
+  - Added `insight` (AI coach text), `overallScore`, `estimatedLevel`, `estimatedApproachSpeed`
+  - Added `scores`, `phaseAnalysis`, `topStrengths`, `topWeaknesses`, `coachNotes`
+  - Added `plan` and `trainingPlan` (instant algorithmic 4-week training plan)
+- Built client-side training plan generator in /api/analyze (no LLM needed, instant response)
+  - 24 real volleyball drills across 4 phases (Approach, Jump & Rotation, Arm Swing & Contact, Follow-Through & Landing)
+  - Each drill has name, sets, reps, coaching cue, and duration
+  - Drills vary by week and day to avoid repetition
+  - Sets increase in weeks 3-4 for progressive overload
+  - Plan prioritizes weakest phase in weeks 1-2, integrates all phases in weeks 3-4
+- Fixed drill selection algorithm to properly vary drills across days using dayOffset parameter
+- All lint checks pass, no compilation errors
+
+Stage Summary:
+- /api/analyze now returns 11 fields covering every possible response format the old cached frontend might expect
+- Training plan is generated instantly (no LLM) with 24 unique volleyball drills organized by phase
+- Both old frontend (via CDN) and new frontend (via dev server) have working workout generation
+- The new SpikeApp (video-first UI) is fully functional: upload → VLM analysis → LLM training plan
