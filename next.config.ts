@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
   },
   reactStrictMode: false,
   serverExternalPackages: ['z-ai-web-dev-sdk'],
+  allowedDevOrigins: ['*'],
 };
 
 export default nextConfig;
