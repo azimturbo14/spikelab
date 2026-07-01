@@ -826,7 +826,7 @@ function TrainingPlanView({
                                     <div className="mt-3 rounded-lg overflow-hidden border bg-black">
                                       <iframe
                                         className="w-full aspect-video"
-                                        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
+                                        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1&start=${drill.videoStart || 0}`}
                                         title={`${drill.name} Tutorial`}
                                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                                         allowFullScreen
