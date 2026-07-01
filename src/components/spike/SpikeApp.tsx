@@ -6,7 +6,7 @@ import {
   Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
   CheckCircle2, AlertTriangle, ArrowRight, Video, Brain,
   Activity, Flame, Footprints, Dumbbell, RotateCcw, Youtube,
-  ChevronDown
+  ChevronDown, Package, Lightbulb
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -753,19 +753,26 @@ function TrainingPlanView({
                           const videoId = drill.videoUrl ? getYouTubeId(drill.videoUrl) : null
                           const drillKey = `${week.week}-${day.day}-${i}`
                           const isOpen = openVideo === drillKey
+                          const needsEquipment = drill.equipment && drill.equipment !== 'None'
                           return (
                             <div key={i} className="bg-muted/30 rounded-md p-2.5">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2 flex-wrap">
                                     <p className="text-sm font-medium">{drill.name}</p>
+                                    {needsEquipment && (
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
+                                        <Package className="w-3 h-3" />
+                                        {drill.equipment}
+                                      </span>
+                                    )}
                                     {videoId && (
                                       <button
                                         onClick={() => toggleVideo(drillKey)}
                                         className="inline-flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-400 transition-colors shrink-0"
                                       >
                                         <Youtube className="w-3.5 h-3.5" />
-                                        {isOpen ? 'Hide' : 'Watch Tutorial'}
+                                        {isOpen ? 'Hide' : 'Watch'}
                                         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                                       </button>
                                     )}
@@ -774,6 +781,14 @@ function TrainingPlanView({
                                     <p className="text-xs text-muted-foreground mt-0.5 italic">
                                       &quot;{drill.cue}&quot;
                                     </p>
+                                  )}
+                                  {needsEquipment && drill.noEquipmentAlt && (
+                                    <div className="mt-1.5 flex items-start gap-1.5 bg-emerald-500/5 border border-emerald-500/20 rounded-md px-2 py-1.5">
+                                      <Lightbulb className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
+                                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 leading-relaxed">
+                                        <span className="font-semibold">No equipment?</span> {drill.noEquipmentAlt}
+                                      </p>
+                                    </div>
                                   )}
                                 </div>
                                 <div className="text-right shrink-0">

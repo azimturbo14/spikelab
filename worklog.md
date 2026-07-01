@@ -250,3 +250,22 @@ Stage Summary:
 - Videos are embedded inline with a click-to-expand UX (no page navigation)
 - Uses privacy-enhanced YouTube embeds (youtube-nocookie.com)
 - Zero external API dependencies maintained
+
+---
+Task ID: 3
+Agent: Main Agent
+Task: Add no-equipment alternatives and fix deployment issues
+
+Work Log:
+- Added `equipment` and `noEquipmentAlt` fields to TrainingDrill type
+- Updated all 24 drills in both /api/generate-plan/route.ts and /api/analyze/route.ts
+- 23 drills have equipment requirements, each with practical household alternatives
+- 30 drill instances need no equipment at all
+- Updated TrainingPlanView UI: amber "📦 Speed ladder" badge for equipment needed, green "💡 No equipment? Use tape..." card for alternatives
+- Fixed next.config.ts allowedDevOrigins to include *.space-z.ai patterns
+- Restarted dev server — no cross-origin warnings, clean compilation
+
+Stage Summary:
+- Every drill that needs equipment now shows: what's needed + exactly how to substitute with household items
+- Examples: Speed ladder → tape/chalk on floor; Plyo box → stairs/park bench; Tennis ball → rolled socks; Cones → water bottles
+- Deployment cross-origin warning resolved with explicit domain patterns

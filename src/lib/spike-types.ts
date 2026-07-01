@@ -65,6 +65,8 @@ export interface TrainingDrill {
   cue: string;
   duration?: string;
   videoUrl?: string;
+  equipment?: string;
+  noEquipmentAlt?: string;
 }
 
 export interface TrainingPlan {

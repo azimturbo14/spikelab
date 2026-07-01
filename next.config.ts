@@ -6,7 +6,11 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  allowedDevOrigins: ['*'],
+  allowedDevOrigins: [
+    '*',
+    'https://*.space-z.ai',
+    'http://*.space-z.ai',
+  ],
 };
 
 export default nextConfig;
