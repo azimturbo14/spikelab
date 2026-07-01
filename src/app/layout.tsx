@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   keywords: ["volleyball", "spike analysis", "biomechanics", "AI coaching", "training plan", "sports science"],
   authors: [{ name: "SpikeLab" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
   openGraph: {
     title: "SpikeLab - AI Volleyball Spike Analysis",
