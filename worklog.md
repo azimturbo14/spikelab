@@ -287,3 +287,45 @@ Stage Summary:
 - Hydration mismatch completely eliminated by delegating ssr:false to a client component wrapper
 - SpikeAppLoader provides a clean loading spinner while the client bundle loads
 - No functional changes to the SpikeApp itself
+
+---
+Task ID: 5
+Agent: Main Agent
+Task: Integrate i18n translation system into SpikeApp.tsx and VideoUploader.tsx
+
+Work Log:
+- Read all context files: i18n.ts (en/ru/uz translations), i18n-store.ts (Zustand hook), LanguageToggle.tsx, spike-types.ts
+- Updated VideoUploader.tsx:
+  - Added `import { useI18n } from '@/lib/i18n-store'`
+  - Called `const { t } = useI18n()` inside component
+  - Replaced 7 hardcoded strings with t().uploader.xxx calls
+- Updated SpikeApp.tsx:
+  - Added imports: useI18n from i18n-store, POSITIONS/EXPERIENCE_LEVELS from spike-types, LanguageToggle component
+  - Removed getScoreLabel import from spike-types (replaced with inline translation logic)
+  - Called `const { t } = useI18n()` at top of SpikeApp, AnalysisView, and TrainingPlanView
+  - Replaced ALL hardcoded strings across all sections:
+    - Header: subtitle, nav labels (Analyze, Features, The Science)
+    - Added `<LanguageToggle />` in header nav
+    - Loading state text
+    - Hero: badge, title, highlight, description, 3 pills
+    - Tabs: all 3 tab labels
+    - Upload tab: profile title/desc, name/position/experience labels, video title/desc, 4 tips, error title, button texts
+    - Position select: uses t().positionLabels for display text, English value stays
+    - Experience select: uses t().experienceLabels for display text, English value stays
+    - Analysis tab: empty state message, all phase labels, checkpoint labels, strengths/weaknesses headings, action buttons
+    - Training tab: title, empty/ready states, generate button, week labels, watch/hide, no equipment, start over
+    - Features section: title, description, cards mapped from t().features.cards
+    - Science section: title, description, phases mapped from t().science.phases
+    - Footer: subtitle, disclaimer
+    - Error messages: all error strings use t().errors.xxx
+  - Replaced getScoreLabel() calls with inline translation using t().scoreLabels
+  - Features cards and science phases now map from translation arrays (icons/colors remain hardcoded)
+- Fixed JSX parsing issue: `keyof typeof t().xxx` syntax doesn't parse in TSX expressions; extracted to local variables
+- Lint passes clean, dev server compiles successfully
+
+Stage Summary:
+- Full i18n support integrated into SpikeApp.tsx (860+ lines) and VideoUploader.tsx
+- All user-visible text now uses the t() translation hook supporting en/ru/uz
+- LanguageToggle component added to header for real-time language switching
+- No logic, styling, icons, or animations were changed — only string literals replaced
+- Position/Experience Select values stay English (for API compatibility), display text is translated

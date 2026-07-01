@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import VideoUploader from './VideoUploader'
+import LanguageToggle from './LanguageToggle'
 import {
   type SpikeAnalysis,
   type TrainingPlan,
@@ -31,12 +32,13 @@ import {
   EXPERIENCE_LEVELS,
   getScoreColor,
   getScoreBgColor,
-  getScoreLabel,
 } from '@/lib/spike-types'
+import { useI18n } from '@/lib/i18n-store'
 
 type TabState = 'upload' | 'analysis' | 'training'
 
 export default function SpikeApp() {
+  const { t } = useI18n()
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
@@ -83,7 +85,7 @@ export default function SpikeApp() {
       })
 
       if (!res.ok) {
-        let errMsg = 'Analysis failed'
+        let errMsg = t().errors.analysisFailed
         try {
           const errData = await res.json()
           errMsg = errData.error || errMsg
@@ -100,13 +102,13 @@ export default function SpikeApp() {
         setAnalysis(data as unknown as import('@/lib/spike-types').SpikeAnalysis)
         setActiveTab('analysis')
       } else {
-        throw new Error('Unexpected response format from analysis')
+        throw new Error(t().errors.unexpectedFormat)
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        setError('Analysis timed out. Please try with a shorter video.')
+        setError(t().errors.timeout)
       } else {
-        setError(err instanceof Error ? err.message : 'Something went wrong')
+        setError(err instanceof Error ? err.message : t().errors.somethingWentWrong)
       }
     } finally {
       clearTimeout(timeoutId)
@@ -127,14 +129,14 @@ export default function SpikeApp() {
 
       if (!res.ok) {
         const errData = await res.json()
-        throw new Error(errData.error || 'Plan generation failed')
+        throw new Error(errData.error || t().errors.planFailed)
       }
 
       const data = await res.json()
       setTrainingPlan(data.plan)
       setActiveTab('training')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to generate plan')
+      setError(err instanceof Error ? err.message : t().errors.planGenerateFailed)
     } finally {
       setIsGeneratingPlan(false)
     }
@@ -157,11 +159,28 @@ export default function SpikeApp() {
           <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center animate-pulse">
             <Zap className="w-6 h-6 text-primary" />
           </div>
-          <p className="text-sm text-muted-foreground">Loading SpikeLab...</p>
+          <p className="text-sm text-muted-foreground">{t().loading}</p>
         </div>
       </div>
     )
   }
+
+  const featureIcons = [Video, Brain, Target, TrendingUp, Activity, ShieldCheck]
+  const sciencePhaseIcons = [Footprints, Activity, Flame, ShieldCheck]
+  const sciencePhaseColors = [
+    'from-blue-500/10 to-cyan-500/10',
+    'from-violet-500/10 to-purple-500/10',
+    'from-orange-500/10 to-amber-500/10',
+    'from-emerald-500/10 to-green-500/10',
+  ]
+  const sciencePhaseBorders = [
+    'border-blue-500/20',
+    'border-violet-500/20',
+    'border-orange-500/20',
+    'border-emerald-500/20',
+  ]
+  const positionLabels = t().positionLabels
+  const experienceLabels = t().experienceLabels
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -174,22 +193,23 @@ export default function SpikeApp() {
             </div>
             <div>
               <span className="font-bold text-lg tracking-tight">SpikeLab</span>
-              <span className="hidden sm:inline text-xs text-muted-foreground ml-2 uppercase tracking-widest">Volleyball Spike Analysis</span>
+              <span className="hidden sm:inline text-xs text-muted-foreground ml-2 uppercase tracking-widest">{t().header.subtitle}</span>
             </div>
           </div>
           <nav className="hidden md:flex items-center gap-1">
             <Button variant="ghost" size="sm" onClick={() => {
               const el = document.getElementById('upload-section')
               el?.scrollIntoView({ behavior: 'smooth' })
-            }}>Analyze</Button>
+            }}>{t().header.nav.analyze}</Button>
             <Button variant="ghost" size="sm" onClick={() => {
               const el = document.getElementById('features-section')
               el?.scrollIntoView({ behavior: 'smooth' })
-            }}>Features</Button>
+            }}>{t().header.nav.features}</Button>
             <Button variant="ghost" size="sm" onClick={() => {
               const el = document.getElementById('science-section')
               el?.scrollIntoView({ behavior: 'smooth' })
-            }}>The Science</Button>
+            }}>{t().header.nav.science}</Button>
+            <LanguageToggle />
           </nav>
         </div>
       </header>
@@ -200,16 +220,16 @@ export default function SpikeApp() {
           <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 via-transparent to-amber-500/5" />
           <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-24 text-center">
             <Badge variant="secondary" className="mb-4 gap-1.5">
-              <Video className="w-3.5 h-3.5" /> Video-Powered Analysis
+              <Video className="w-3.5 h-3.5" /> {t().hero.badge}
             </Badge>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               className="text-3xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6"
             >
-              Upload your spike.{' '}
+              {t().hero.title1}{' '}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-amber-500">
-                Get the truth.
+                {t().hero.titleHighlight}
               </span>
             </motion.h1>
             <motion.p
@@ -218,8 +238,7 @@ export default function SpikeApp() {
               transition={{ delay: 0.1 }}
               className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-8"
             >
-              AI watches your spike video and rates 15 biomechanical checkpoints. No guessing, no
-              subjective sliders. Just real data from your real movement.
+              {t().hero.description}
             </motion.p>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -228,13 +247,13 @@ export default function SpikeApp() {
               className="flex flex-wrap justify-center gap-3 text-sm text-muted-foreground"
             >
               <span className="flex items-center gap-1.5">
-                <Brain className="w-4 h-4 text-orange-500" /> AI biomechanical audit
+                <Brain className="w-4 h-4 text-orange-500" /> {t().hero.pill1}
               </span>
               <span className="flex items-center gap-1.5">
-                <Target className="w-4 h-4 text-orange-500" /> Strengths &amp; weaknesses ranked
+                <Target className="w-4 h-4 text-orange-500" /> {t().hero.pill2}
               </span>
               <span className="flex items-center gap-1.5">
-                <TrendingUp className="w-4 h-4 text-orange-500" /> Personalized 4-week plan
+                <TrendingUp className="w-4 h-4 text-orange-500" /> {t().hero.pill3}
               </span>
             </motion.div>
           </div>
@@ -245,13 +264,13 @@ export default function SpikeApp() {
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabState)}>
             <TabsList className="grid w-full grid-cols-3 mb-8">
               <TabsTrigger value="upload" className="gap-1.5">
-                <Video className="w-4 h-4" /> 1. Upload Video
+                <Video className="w-4 h-4" /> {t().tabs.upload}
               </TabsTrigger>
               <TabsTrigger value="analysis" disabled={!analysis} className="gap-1.5">
-                <Activity className="w-4 h-4" /> 2. Analysis
+                <Activity className="w-4 h-4" /> {t().tabs.analysis}
               </TabsTrigger>
               <TabsTrigger value="training" disabled={!trainingPlan} className="gap-1.5">
-                <Dumbbell className="w-4 h-4" /> 3. Training Plan
+                <Dumbbell className="w-4 h-4" /> {t().tabs.training}
               </TabsTrigger>
             </TabsList>
 
@@ -261,38 +280,38 @@ export default function SpikeApp() {
                 <CardContent className="p-4 sm:p-6 space-y-6">
                   {/* Player Profile - Minimal */}
                   <div>
-                    <h3 className="font-semibold mb-1">Player Profile</h3>
+                    <h3 className="font-semibold mb-1">{t().upload.profileTitle}</h3>
                     <p className="text-sm text-muted-foreground mb-4">
-                      Optional. Helps calibrate your results against position-level benchmarks.
+                      {t().upload.profileDesc}
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="player-name">Name / Nickname</Label>
+                        <Label htmlFor="player-name">{t().upload.nameLabel}</Label>
                         <Input
                           id="player-name"
-                          placeholder="Your name"
+                          placeholder={t().upload.namePlaceholder}
                           value={profile.name}
                           onChange={(e) => setProfile(p => ({ ...p, name: e.target.value }))}
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Position</Label>
+                        <Label>{t().upload.positionLabel}</Label>
                         <Select value={profile.position} onValueChange={(v) => setProfile(p => ({ ...p, position: v }))}>
                           <SelectTrigger><SelectValue /></SelectTrigger>
                           <SelectContent>
                             {POSITIONS.map(pos => (
-                              <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                              <SelectItem key={pos} value={pos}>{positionLabels[pos as keyof typeof positionLabels]}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Experience</Label>
+                        <Label>{t().upload.experienceLabel}</Label>
                         <Select value={profile.experience} onValueChange={(v) => setProfile(p => ({ ...p, experience: v }))}>
                           <SelectTrigger><SelectValue /></SelectTrigger>
                           <SelectContent>
                             {EXPERIENCE_LEVELS.map(lvl => (
-                              <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+                              <SelectItem key={lvl} value={lvl}>{experienceLabels[lvl as keyof typeof experienceLabels]}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -304,9 +323,9 @@ export default function SpikeApp() {
 
                   {/* Video Upload */}
                   <div>
-                    <h3 className="font-semibold mb-1">Upload Your Spike Video</h3>
+                    <h3 className="font-semibold mb-1">{t().upload.videoTitle}</h3>
                     <p className="text-sm text-muted-foreground mb-4">
-                      Record yourself performing a full spike approach and hit. Side angle works best.
+                      {t().upload.videoDesc}
                     </p>
                     <VideoUploader
                       onVideoReady={handleVideoReady}
@@ -318,13 +337,13 @@ export default function SpikeApp() {
                   {/* Video Tips */}
                   <div className="bg-muted/50 rounded-xl p-4 space-y-2">
                     <h4 className="font-medium text-sm flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Tips for best results
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500" /> {t().upload.tipsTitle}
                     </h4>
                     <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-                      <li>Record from the <strong>side angle</strong> (perpendicular to the net)</li>
-                      <li>Show the <strong>full approach and jump</strong> — not just the hit</li>
-                      <li>Good lighting, steady camera</li>
-                      <li>Wear contrasting clothing against the background</li>
+                      <li>{t().upload.tip1}</li>
+                      <li>{t().upload.tip2}</li>
+                      <li>{t().upload.tip3}</li>
+                      <li>{t().upload.tip4}</li>
                     </ul>
                   </div>
 
@@ -333,7 +352,7 @@ export default function SpikeApp() {
                     <div className="bg-destructive/10 text-destructive rounded-lg p-4 text-sm flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                       <div>
-                        <p className="font-medium">Analysis failed</p>
+                        <p className="font-medium">{t().upload.errorTitle}</p>
                         <p className="text-destructive/80">{error}</p>
                       </div>
                     </div>
@@ -355,17 +374,17 @@ export default function SpikeApp() {
                           >
                             <RotateCcw className="w-4 h-4" />
                           </motion.div>
-                          Analyzing...
+                          {t().upload.analyzingBtn}
                         </>
                       ) : (
                         <>
-                          <Brain className="w-4 h-4" /> Analyze My Spike
+                          <Brain className="w-4 h-4" /> {t().upload.analyzeBtn}
                         </>
                       )}
                     </Button>
                     {videoFile && !isAnalyzing && (
                       <Button variant="outline" size="lg" onClick={handleReset}>
-                        Reset
+                        {t().upload.resetBtn}
                       </Button>
                     )}
                   </div>
@@ -386,7 +405,7 @@ export default function SpikeApp() {
               ) : (
                 <Card className="p-8 text-center text-muted-foreground">
                   <Activity className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                  <p>Upload and analyze a video first to see your results.</p>
+                  <p>{t().analysis.emptyMsg}</p>
                 </Card>
               )}
             </TabsContent>
@@ -398,24 +417,24 @@ export default function SpikeApp() {
               ) : analysis ? (
                 <Card className="p-8 text-center">
                   <Dumbbell className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-50" />
-                  <p className="text-muted-foreground mb-4">Your analysis is ready. Generate your personalized training plan.</p>
+                  <p className="text-muted-foreground mb-4">{t().training.readyMsg}</p>
                   <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2">
                     {isGeneratingPlan ? (
                       <>
                         <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
                           <RotateCcw className="w-4 h-4" />
                         </motion.div>
-                        Generating plan...
+                        {t().training.generatingBtn}
                       </>
                     ) : (
-                      <>Generate 4-Week Plan <ChevronRight className="w-4 h-4" /></>
+                      <>{t().training.generateBtn} <ChevronRight className="w-4 h-4" /></>
                     )}
                   </Button>
                 </Card>
               ) : (
                 <Card className="p-8 text-center text-muted-foreground">
                   <Dumbbell className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                  <p>Complete the analysis first, then generate your training plan.</p>
+                  <p>{t().training.emptyMsg}</p>
                 </Card>
               )}
             </TabsContent>
@@ -426,27 +445,22 @@ export default function SpikeApp() {
         <section id="features-section" className="bg-muted/30 py-16 sm:py-20">
           <div className="max-w-6xl mx-auto px-4 sm:px-6">
             <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
-              Everything you need to actually fix your spike
+              {t().features.title}
             </h2>
             <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
-              No more guessing. The AI watches your video and tells you exactly what&apos;s happening — then
-              builds a plan around your real weaknesses.
+              {t().features.description}
             </p>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[
-                { icon: Video, title: 'Video-Powered Analysis', desc: 'Upload a video of your spike. The AI analyzes 15 biomechanical checkpoints from actual movement data — not subjective self-assessment.' },
-                { icon: Brain, title: 'AI Biomechanical Audit', desc: 'A vision model trained on sports biomechanics rates your approach, jump, contact, and landing with expert-level accuracy.' },
-                { icon: Target, title: 'Strengths & Weaknesses Ranked', desc: 'See what you\'re already doing well and what\'s killing your spike — in priority order. Stop fixing what isn\'t broken.' },
-                { icon: TrendingUp, title: 'Personalized 4-Week Plan', desc: 'Daily drills with sets, reps, and coaching cues organized around your weakest phases. Built for actual athletes.' },
-                { icon: Activity, title: 'Phase-by-Phase Breakdown', desc: 'Separate scores for Approach, Jump, Contact, and Follow-Through. Know exactly which phase to attack first.' },
-                { icon: ShieldCheck, title: 'Injury-First Mindset', desc: 'Landing balance and follow-through are scored as hard as power. The best spike is one you can repeat injury-free.' },
-              ].map((f) => (
-                <Card key={f.title} className="p-6">
-                  <f.icon className="w-8 h-8 text-orange-500 mb-3" />
-                  <h3 className="font-semibold mb-2">{f.title}</h3>
-                  <p className="text-sm text-muted-foreground">{f.desc}</p>
-                </Card>
-              ))}
+              {t().features.cards.map((f, idx) => {
+                const Icon = featureIcons[idx]
+                return (
+                  <Card key={f.title} className="p-6">
+                    <Icon className="w-8 h-8 text-orange-500 mb-3" />
+                    <h3 className="font-semibold mb-2">{f.title}</h3>
+                    <p className="text-sm text-muted-foreground">{f.desc}</p>
+                  </Card>
+                )
+              })}
             </div>
           </div>
         </section>
@@ -455,63 +469,35 @@ export default function SpikeApp() {
         <section id="science-section" className="py-16 sm:py-20">
           <div className="max-w-4xl mx-auto px-4 sm:px-6">
             <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
-              The 4 phases of an elite spike
+              {t().science.title}
             </h2>
             <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
-              Power in volleyball is not about arm strength — it&apos;s about the kinetic chain. Energy flows from the ground through the legs, hips, torso, shoulder, arm, and wrist into the ball.
+              {t().science.description}
             </p>
             <div className="space-y-8">
-              {[
-                {
-                  phase: '1. The Approach',
-                  icon: Footprints,
-                  color: 'from-blue-500/10 to-cyan-500/10',
-                  border: 'border-blue-500/20',
-                  desc: 'A 3-step (or 4-step) approach where the last two steps are the longest and fastest. The second-to-last step converts horizontal momentum into vertical force.',
-                  items: ['Approach speed', 'Last step length', 'Approach angle', 'Footwork rhythm', 'Arm swing back'],
-                },
-                {
-                  phase: '2. The Jump',
-                  icon: Activity,
-                  color: 'from-violet-500/10 to-purple-500/10',
-                  border: 'border-violet-500/20',
-                  desc: 'Maximized by hip-shoulder separation. The hips stay closed while the shoulders rotate, storing elastic energy in the core — the engine of spiking power.',
-                  items: ['Vertical jump conversion', 'Hip-shoulder rotation', 'Air body position'],
-                },
-                {
-                  phase: '3. Arm Swing & Contact',
-                  icon: Flame,
-                  color: 'from-orange-500/10 to-amber-500/10',
-                  border: 'border-orange-500/20',
-                  desc: 'The hitting arm loads into a bow-and-arrow position, then whips through with internal shoulder rotation. Wrist snap generates topspin for a heavy, sharp ball.',
-                  items: ['Bow-and-arrow position', 'Arm swing speed', 'Contact point', 'Wrist snap', 'Contact height'],
-                },
-                {
-                  phase: '4. Follow-Through & Landing',
-                  icon: ShieldCheck,
-                  color: 'from-emerald-500/10 to-green-500/10',
-                  border: 'border-emerald-500/20',
-                  desc: 'The arm continues across the body to decelerate safely. A soft two-foot landing with knees bent protects joints and enables instant defensive transition.',
-                  items: ['Follow-through', 'Landing balance'],
-                },
-              ].map((p) => (
-                <Card key={p.phase} className={`p-6 bg-gradient-to-r ${p.color} border ${p.border}`}>
-                  <div className="flex items-start gap-4">
-                    <div className="w-10 h-10 rounded-lg bg-background/80 flex items-center justify-center shrink-0 mt-0.5">
-                      <p.icon className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-lg mb-1">{p.phase}</h3>
-                      <p className="text-sm text-muted-foreground mb-3">{p.desc}</p>
-                      <div className="flex flex-wrap gap-2">
-                        {p.items.map(item => (
-                          <Badge key={item} variant="secondary" className="text-xs">{item}</Badge>
-                        ))}
+              {t().science.phases.map((p, idx) => {
+                const Icon = sciencePhaseIcons[idx]
+                const color = sciencePhaseColors[idx]
+                const border = sciencePhaseBorders[idx]
+                return (
+                  <Card key={p.title} className={`p-6 bg-gradient-to-r ${color} border ${border}`}>
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-background/80 flex items-center justify-center shrink-0 mt-0.5">
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-lg mb-1">{p.title}</h3>
+                        <p className="text-sm text-muted-foreground mb-3">{p.desc}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {p.items.map(item => (
+                            <Badge key={item} variant="secondary" className="text-xs">{item}</Badge>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                )
+              })}
             </div>
           </div>
         </section>
@@ -523,11 +509,10 @@ export default function SpikeApp() {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4" />
             <span className="font-medium text-foreground">SpikeLab</span>
-            <span>Volleyball Spike Analysis & Training</span>
+            <span>{t().footer.subtitle}</span>
           </div>
           <p className="text-xs text-center sm:text-right max-w-md">
-            Not a substitute for in-person coaching. Always warm up properly and consult a sports
-            physiotherapist if you experience persistent pain.
+            {t().footer.disclaimer}
           </p>
         </div>
       </footer>
@@ -550,16 +535,35 @@ function AnalysisView({
   isGenerating: boolean
   onReset: () => void
 }) {
+  const { t } = useI18n()
+
   const overallAvg = Math.round(
     Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 15
   )
 
   const phases = [
-    { key: 'approach' as const, label: 'Approach', icon: Footprints, color: 'text-blue-500' },
-    { key: 'jump' as const, label: 'Jump & Rotation', icon: Activity, color: 'text-violet-500' },
-    { key: 'contact' as const, label: 'Arm Swing & Contact', icon: Flame, color: 'text-orange-500' },
-    { key: 'followThrough' as const, label: 'Follow-Through & Landing', icon: ShieldCheck, color: 'text-emerald-500' },
+    { key: 'approach' as const, label: t().analysis.phaseApproach, labelKey: 'phaseLabelApproach' as const, icon: Footprints, color: 'text-blue-500' },
+    { key: 'jump' as const, label: t().analysis.phaseJump, labelKey: 'phaseLabelJump' as const, icon: Activity, color: 'text-violet-500' },
+    { key: 'contact' as const, label: t().analysis.phaseContact, labelKey: 'phaseLabelContact' as const, icon: Flame, color: 'text-orange-500' },
+    { key: 'followThrough' as const, label: t().analysis.phaseFollowThrough, labelKey: 'phaseLabelFollowThrough' as const, icon: ShieldCheck, color: 'text-emerald-500' },
   ]
+
+  const phaseLabelMap: Record<string, string> = {
+    approach: t().analysis.phaseLabelApproach,
+    jump: t().analysis.phaseLabelJump,
+    contact: t().analysis.phaseLabelContact,
+    followThrough: t().analysis.phaseLabelFollowThrough,
+  }
+
+  function getScoreLabel(score: number): string {
+    if (score >= 90) return t().scoreLabels.elite
+    if (score >= 76) return t().scoreLabels.excellent
+    if (score >= 60) return t().scoreLabels.decent
+    if (score >= 40) return t().scoreLabels.needsWork
+    return t().scoreLabels.critical
+  }
+
+  const checkpoints = t().checkpoints
 
   return (
     <div className="space-y-6">
@@ -590,7 +594,7 @@ function AnalysisView({
                 </Badge>
               </div>
               <h2 className="text-xl sm:text-2xl font-bold mb-1">
-                {playerName ? `${playerName}'s` : 'Your'} Spike Analysis
+                {playerName ? `${playerName}'s` : t().analysis.yourSpikeAnalysis}
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
                 {analysis.coachNotes}
@@ -623,13 +627,13 @@ function AnalysisView({
       {/* Detailed Checkpoint Scores */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">All 15 Checkpoints</CardTitle>
+          <CardTitle className="text-lg">{t().analysis.allCheckpoints}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {(['approach', 'jump', 'contact', 'followThrough'] as const).map(phase => {
             const phaseCheckpoints = (Object.entries(analysis.scores) as [keyof CheckpointScores, number][])
               .filter(([k]) => CHECKPOINT_LABELS[k].phase === phase)
-            const phaseLabel = phase === 'followThrough' ? 'Follow-Through' : phase.charAt(0).toUpperCase() + phase.slice(1)
+            const phaseLabel = phaseLabelMap[phase]
             return (
               <div key={phase}>
                 <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">
@@ -638,7 +642,7 @@ function AnalysisView({
                 <div className="grid sm:grid-cols-2 gap-2">
                   {phaseCheckpoints.map(([key, score]) => (
                     <div key={key} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
-                      <span className="text-sm">{CHECKPOINT_LABELS[key].label}</span>
+                      <span className="text-sm">{checkpoints[key as keyof typeof checkpoints]}</span>
                       <div className="flex items-center gap-2">
                         <span className={`text-sm font-semibold ${getScoreColor(score)}`}>{score}</span>
                         <Badge variant="outline" className={`text-[10px] ${getScoreColor(score)}`}>
@@ -658,7 +662,7 @@ function AnalysisView({
       <div className="grid sm:grid-cols-2 gap-4">
         <Card className="p-5">
           <h3 className="font-semibold mb-3 flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Top Strengths
+            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {t().analysis.topStrengths}
           </h3>
           <ul className="space-y-2">
             {analysis.topStrengths.map((s, i) => (
@@ -671,7 +675,7 @@ function AnalysisView({
         </Card>
         <Card className="p-5">
           <h3 className="font-semibold mb-3 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-500" /> Top Weaknesses
+            <AlertTriangle className="w-5 h-5 text-amber-500" /> {t().analysis.topWeaknesses}
           </h3>
           <ul className="space-y-2">
             {analysis.topWeaknesses.map((w, i) => (
@@ -692,14 +696,14 @@ function AnalysisView({
               <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
                 <RotateCcw className="w-4 h-4" />
               </motion.div>
-              Generating plan...
+              {t().analysis.generatingBtn}
             </>
           ) : (
-            <>Generate 4-Week Training Plan <ArrowRight className="w-4 h-4" /></>
+            <>{t().analysis.generateBtn} <ArrowRight className="w-4 h-4" /></>
           )}
         </Button>
         <Button variant="outline" size="lg" onClick={onReset}>
-          New Analysis
+          {t().analysis.newAnalysisBtn}
         </Button>
       </div>
     </div>
@@ -715,6 +719,7 @@ function TrainingPlanView({
   plan: TrainingPlan
   onReset: () => void
 }) {
+  const { t } = useI18n()
   const [openVideo, setOpenVideo] = useState<string | null>(null)
 
   function getYouTubeId(url: string): string | null {
@@ -729,7 +734,7 @@ function TrainingPlanView({
   return (
     <div className="space-y-6">
       <Card className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
-        <h2 className="text-xl sm:text-2xl font-bold mb-2">Your 4-Week Training Plan</h2>
+        <h2 className="text-xl sm:text-2xl font-bold mb-2">{t().training.title}</h2>
         <p className="text-muted-foreground mb-4">{plan.summary}</p>
         <div className="flex flex-wrap gap-2">
           {plan.keyFocus.map(f => (
@@ -750,7 +755,7 @@ function TrainingPlanView({
               <CardHeader className="bg-muted/30">
                 <div className="flex items-center justify-between">
                   <div>
-                    <Badge variant="outline" className="mb-1">Week {week.week}</Badge>
+                    <Badge variant="outline" className="mb-1">{t().training.week} {week.week}</Badge>
                     <CardTitle className="text-lg">{week.title}</CardTitle>
                   </div>
                 </div>
@@ -788,7 +793,7 @@ function TrainingPlanView({
                                         className="inline-flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-400 transition-colors shrink-0"
                                       >
                                         <Youtube className="w-3.5 h-3.5" />
-                                        {isOpen ? 'Hide' : 'Watch'}
+                                        {isOpen ? t().training.hide : t().training.watch}
                                         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                                       </button>
                                     )}
@@ -802,7 +807,7 @@ function TrainingPlanView({
                                     <div className="mt-1.5 flex items-start gap-1.5 bg-emerald-500/5 border border-emerald-500/20 rounded-md px-2 py-1.5">
                                       <Lightbulb className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
                                       <p className="text-[11px] text-emerald-700 dark:text-emerald-400 leading-relaxed">
-                                        <span className="font-semibold">No equipment?</span> {drill.noEquipmentAlt}
+                                        <span className="font-semibold">{t().training.noEquipment}</span> {drill.noEquipmentAlt}
                                       </p>
                                     </div>
                                   )}
@@ -850,7 +855,7 @@ function TrainingPlanView({
 
       <div className="flex justify-center pt-4">
         <Button variant="outline" size="lg" onClick={onReset} className="gap-2">
-          <RotateCcw className="w-4 h-4" /> Start Over
+          <RotateCcw className="w-4 h-4" /> {t().training.startOver}
         </Button>
       </div>
     </div>

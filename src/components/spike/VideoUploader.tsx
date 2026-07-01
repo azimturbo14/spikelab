@@ -2,6 +2,7 @@
 
 import { Upload, X, Loader2 } from 'lucide-react';
 import { useCallback, useState, useRef } from 'react';
+import { useI18n } from '@/lib/i18n-store';
 
 interface VideoUploaderProps {
   onVideoReady: (file: File) => void;
@@ -20,6 +21,7 @@ export default function VideoUploader({
   isAnalyzing,
   disabled,
 }: VideoUploaderProps) {
+  const { t } = useI18n();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -161,7 +163,7 @@ export default function VideoUploader({
                     : 'text-foreground'
                 }`}
               >
-                Drop your spike video here
+                {t().uploader.dropHere}
               </p>
               <p
                 className={`mt-1 text-sm ${
@@ -170,11 +172,11 @@ export default function VideoUploader({
                     : 'text-muted-foreground'
                 }`}
               >
-                or click to browse
+                {t().uploader.orBrowse}
               </p>
             </div>
             <p className="text-xs text-muted-foreground/60">
-              MP4, MOV, AVI, WebM — up to 50MB
+              {t().uploader.formats}
             </p>
           </div>
         ) : (
@@ -197,7 +199,7 @@ export default function VideoUploader({
                 className="flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
               >
                 <X className="h-3.5 w-3.5" />
-                Remove
+                {t().uploader.remove}
               </button>
             </div>
 
@@ -215,7 +217,7 @@ export default function VideoUploader({
             {!isAnalyzing && (
               <div className="mt-2 flex items-center justify-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
                 <div className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
-                Ready to analyze
+                {t().uploader.readyToAnalyze}
               </div>
             )}
           </div>
@@ -226,10 +228,10 @@ export default function VideoUploader({
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl bg-background/80 backdrop-blur-sm">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm font-medium text-foreground">
-              Analyzing your spike with AI...
+              {t().uploader.analyzing}
             </p>
             <p className="text-xs text-muted-foreground">
-              YOLOv8 pose tracking every frame — about 5-15 seconds
+              {t().uploader.analyzingSub}
             </p>
           </div>
         )}

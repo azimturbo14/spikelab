@@ -1,0 +1,858 @@
+     1→'use client'
+     2→
+     3→import { useState, useCallback, useEffect } from 'react'
+     4→import { motion, AnimatePresence } from 'framer-motion'
+     5→import {
+     6→  Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
+     7→  CheckCircle2, AlertTriangle, ArrowRight, Video, Brain,
+     8→  Activity, Flame, Footprints, Dumbbell, RotateCcw, Youtube,
+     9→  ChevronDown, Package, Lightbulb
+    10→} from 'lucide-react'
+    11→import { Button } from '@/components/ui/button'
+    12→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    13→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    14→import { Badge } from '@/components/ui/badge'
+    15→import { Progress } from '@/components/ui/progress'
+    16→import {
+    17→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    18→} from '@/components/ui/select'
+    19→import { Input } from '@/components/ui/input'
+    20→import { Label } from '@/components/ui/label'
+    21→import { Separator } from '@/components/ui/separator'
+    22→import { Skeleton } from '@/components/ui/skeleton'
+    23→import VideoUploader from './VideoUploader'
+    24→import {
+    25→  type SpikeAnalysis,
+    26→  type TrainingPlan,
+    27→  type PlayerProfile,
+    28→  type CheckpointScores,
+    29→  CHECKPOINT_LABELS,
+    30→  POSITIONS,
+    31→  EXPERIENCE_LEVELS,
+    32→  getScoreColor,
+    33→  getScoreBgColor,
+    34→  getScoreLabel,
+    35→} from '@/lib/spike-types'
+    36→
+    37→type TabState = 'upload' | 'analysis' | 'training'
+    38→
+    39→export default function SpikeApp() {
+    40→  const [mounted, setMounted] = useState(false)
+    41→  useEffect(() => { setMounted(true) }, [])
+    42→
+    43→  const [activeTab, setActiveTab] = useState<TabState>('upload')
+    44→  const [videoFile, setVideoFile] = useState<File | null>(null)
+    45→  const [isAnalyzing, setIsAnalyzing] = useState(false)
+    46→  const [analysis, setAnalysis] = useState<SpikeAnalysis | null>(null)
+    47→  const [trainingPlan, setTrainingPlan] = useState<TrainingPlan | null>(null)
+    48→  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false)
+    49→  const [error, setError] = useState<string | null>(null)
+    50→
+    51→  const [profile, setProfile] = useState<PlayerProfile>({
+    52→    name: '',
+    53→    position: 'Outside Hitter',
+    54→    experience: 'Intermediate (2-5 years)',
+    55→  })
+    56→
+    57→  const handleVideoReady = useCallback((file: File) => {
+    58→    setVideoFile(file)
+    59→    setError(null)
+    60→  }, [])
+    61→
+    62→  const handleAnalyze = async () => {
+    63→    if (!videoFile) return
+    64→    setIsAnalyzing(true)
+    65→    setError(null)
+    66→    setAnalysis(null)
+    67→    setTrainingPlan(null)
+    68→
+    69→    const controller = new AbortController()
+    70→    const timeoutId = setTimeout(() => controller.abort(), 180_000) // 3 min timeout
+    71→
+    72→    try {
+    73→      const formData = new FormData()
+    74→      formData.append('video', videoFile)
+    75→      formData.append('name', profile.name)
+    76→      formData.append('position', profile.position)
+    77→      formData.append('experience', profile.experience)
+    78→
+    79→      const res = await fetch('/api/analyze-spike', {
+    80→        method: 'POST',
+    81→        body: formData,
+    82→        signal: controller.signal,
+    83→      })
+    84→
+    85→      if (!res.ok) {
+    86→        let errMsg = 'Analysis failed'
+    87→        try {
+    88→          const errData = await res.json()
+    89→          errMsg = errData.error || errMsg
+    90→        } catch { /* response wasn't JSON */ }
+    91→        throw new Error(errMsg)
+    92→      }
+    93→
+    94→      const data = await res.json()
+    95→      if (data.analysis) {
+    96→        setAnalysis(data.analysis)
+    97→        setActiveTab('analysis')
+    98→      } else if (data.scores) {
+    99→        // API returned analysis directly without wrapper
+   100→        setAnalysis(data as unknown as import('@/lib/spike-types').SpikeAnalysis)
+   101→        setActiveTab('analysis')
+   102→      } else {
+   103→        throw new Error('Unexpected response format from analysis')
+   104→      }
+   105→    } catch (err: unknown) {
+   106→      if (err instanceof DOMException && err.name === 'AbortError') {
+   107→        setError('Analysis timed out. Please try with a shorter video.')
+   108→      } else {
+   109→        setError(err instanceof Error ? err.message : 'Something went wrong')
+   110→      }
+   111→    } finally {
+   112→      clearTimeout(timeoutId)
+   113→      setIsAnalyzing(false)
+   114→    }
+   115→  }
+   116→
+   117→  const handleGeneratePlan = async () => {
+   118→    if (!analysis) return
+   119→    setIsGeneratingPlan(true)
+   120→
+   121→    try {
+   122→      const res = await fetch('/api/generate-plan', {
+   123→        method: 'POST',
+   124→        headers: { 'Content-Type': 'application/json' },
+   125→        body: JSON.stringify({ analysis, profile }),
+   126→      })
+   127→
+   128→      if (!res.ok) {
+   129→        const errData = await res.json()
+   130→        throw new Error(errData.error || 'Plan generation failed')
+   131→      }
+   132→
+   133→      const data = await res.json()
+   134→      setTrainingPlan(data.plan)
+   135→      setActiveTab('training')
+   136→    } catch (err: unknown) {
+   137→      setError(err instanceof Error ? err.message : 'Failed to generate plan')
+   138→    } finally {
+   139→      setIsGeneratingPlan(false)
+   140→    }
+   141→  }
+   142→
+   143→  const handleReset = () => {
+   144→    setVideoFile(null)
+   145→    setAnalysis(null)
+   146→    setTrainingPlan(null)
+   147→    setError(null)
+   148→    setActiveTab('upload')
+   149→  }
+   150→
+   151→  const canAnalyze = videoFile !== null && !isAnalyzing
+   152→
+   153→  if (!mounted) {
+   154→    return (
+   155→      <div className="min-h-screen flex items-center justify-center bg-background">
+   156→        <div className="flex flex-col items-center gap-3">
+   157→          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center animate-pulse">
+   158→            <Zap className="w-6 h-6 text-primary" />
+   159→          </div>
+   160→          <p className="text-sm text-muted-foreground">Loading SpikeLab...</p>
+   161→        </div>
+   162→      </div>
+   163→    )
+   164→  }
+   165→
+   166→  return (
+   167→    <div className="min-h-screen flex flex-col bg-background">
+   168→      {/* Header */}
+   169→      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
+   170→        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+   171→          <div className="flex items-center gap-3">
+   172→            <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
+   173→              <Zap className="w-5 h-5 text-primary-foreground" />
+   174→            </div>
+   175→            <div>
+   176→              <span className="font-bold text-lg tracking-tight">SpikeLab</span>
+   177→              <span className="hidden sm:inline text-xs text-muted-foreground ml-2 uppercase tracking-widest">Volleyball Spike Analysis</span>
+   178→            </div>
+   179→          </div>
+   180→          <nav className="hidden md:flex items-center gap-1">
+   181→            <Button variant="ghost" size="sm" onClick={() => {
+   182→              const el = document.getElementById('upload-section')
+   183→              el?.scrollIntoView({ behavior: 'smooth' })
+   184→            }}>Analyze</Button>
+   185→            <Button variant="ghost" size="sm" onClick={() => {
+   186→              const el = document.getElementById('features-section')
+   187→              el?.scrollIntoView({ behavior: 'smooth' })
+   188→            }}>Features</Button>
+   189→            <Button variant="ghost" size="sm" onClick={() => {
+   190→              const el = document.getElementById('science-section')
+   191→              el?.scrollIntoView({ behavior: 'smooth' })
+   192→            }}>The Science</Button>
+   193→          </nav>
+   194→        </div>
+   195→      </header>
+   196→
+   197→      <main className="flex-1">
+   198→        {/* Hero */}
+   199→        <section className="relative overflow-hidden">
+   200→          <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 via-transparent to-amber-500/5" />
+   201→          <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-24 text-center">
+   202→            <Badge variant="secondary" className="mb-4 gap-1.5">
+   203→              <Video className="w-3.5 h-3.5" /> Video-Powered Analysis
+   204→            </Badge>
+   205→            <motion.h1
+   206→              initial={{ opacity: 0, y: 20 }}
+   207→              animate={{ opacity: 1, y: 0 }}
+   208→              className="text-3xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6"
+   209→            >
+   210→              Upload your spike.{' '}
+   211→              <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-amber-500">
+   212→                Get the truth.
+   213→              </span>
+   214→            </motion.h1>
+   215→            <motion.p
+   216→              initial={{ opacity: 0, y: 20 }}
+   217→              animate={{ opacity: 1, y: 0 }}
+   218→              transition={{ delay: 0.1 }}
+   219→              className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-8"
+   220→            >
+   221→              AI watches your spike video and rates 15 biomechanical checkpoints. No guessing, no
+   222→              subjective sliders. Just real data from your real movement.
+   223→            </motion.p>
+   224→            <motion.div
+   225→              initial={{ opacity: 0, y: 20 }}
+   226→              animate={{ opacity: 1, y: 0 }}
+   227→              transition={{ delay: 0.2 }}
+   228→              className="flex flex-wrap justify-center gap-3 text-sm text-muted-foreground"
+   229→            >
+   230→              <span className="flex items-center gap-1.5">
+   231→                <Brain className="w-4 h-4 text-orange-500" /> AI biomechanical audit
+   232→              </span>
+   233→              <span className="flex items-center gap-1.5">
+   234→                <Target className="w-4 h-4 text-orange-500" /> Strengths &amp; weaknesses ranked
+   235→              </span>
+   236→              <span className="flex items-center gap-1.5">
+   237→                <TrendingUp className="w-4 h-4 text-orange-500" /> Personalized 4-week plan
+   238→              </span>
+   239→            </motion.div>
+   240→          </div>
+   241→        </section>
+   242→
+   243→        {/* Main Tool */}
+   244→        <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 pb-20">
+   245→          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabState)}>
+   246→            <TabsList className="grid w-full grid-cols-3 mb-8">
+   247→              <TabsTrigger value="upload" className="gap-1.5">
+   248→                <Video className="w-4 h-4" /> 1. Upload Video
+   249→              </TabsTrigger>
+   250→              <TabsTrigger value="analysis" disabled={!analysis} className="gap-1.5">
+   251→                <Activity className="w-4 h-4" /> 2. Analysis
+   252→              </TabsTrigger>
+   253→              <TabsTrigger value="training" disabled={!trainingPlan} className="gap-1.5">
+   254→                <Dumbbell className="w-4 h-4" /> 3. Training Plan
+   255→              </TabsTrigger>
+   256→            </TabsList>
+   257→
+   258→            {/* Tab 1: Upload */}
+   259→            <TabsContent value="upload">
+   260→              <Card>
+   261→                <CardContent className="p-4 sm:p-6 space-y-6">
+   262→                  {/* Player Profile - Minimal */}
+   263→                  <div>
+   264→                    <h3 className="font-semibold mb-1">Player Profile</h3>
+   265→                    <p className="text-sm text-muted-foreground mb-4">
+   266→                      Optional. Helps calibrate your results against position-level benchmarks.
+   267→                    </p>
+   268→                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   269→                      <div className="space-y-2">
+   270→                        <Label htmlFor="player-name">Name / Nickname</Label>
+   271→                        <Input
+   272→                          id="player-name"
+   273→                          placeholder="Your name"
+   274→                          value={profile.name}
+   275→                          onChange={(e) => setProfile(p => ({ ...p, name: e.target.value }))}
+   276→                        />
+   277→                      </div>
+   278→                      <div className="space-y-2">
+   279→                        <Label>Position</Label>
+   280→                        <Select value={profile.position} onValueChange={(v) => setProfile(p => ({ ...p, position: v }))}>
+   281→                          <SelectTrigger><SelectValue /></SelectTrigger>
+   282→                          <SelectContent>
+   283→                            {POSITIONS.map(pos => (
+   284→                              <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+   285→                            ))}
+   286→                          </SelectContent>
+   287→                        </Select>
+   288→                      </div>
+   289→                      <div className="space-y-2">
+   290→                        <Label>Experience</Label>
+   291→                        <Select value={profile.experience} onValueChange={(v) => setProfile(p => ({ ...p, experience: v }))}>
+   292→                          <SelectTrigger><SelectValue /></SelectTrigger>
+   293→                          <SelectContent>
+   294→                            {EXPERIENCE_LEVELS.map(lvl => (
+   295→                              <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+   296→                            ))}
+   297→                          </SelectContent>
+   298→                        </Select>
+   299→                      </div>
+   300→                    </div>
+   301→                  </div>
+   302→
+   303→                  <Separator />
+   304→
+   305→                  {/* Video Upload */}
+   306→                  <div>
+   307→                    <h3 className="font-semibold mb-1">Upload Your Spike Video</h3>
+   308→                    <p className="text-sm text-muted-foreground mb-4">
+   309→                      Record yourself performing a full spike approach and hit. Side angle works best.
+   310→                    </p>
+   311→                    <VideoUploader
+   312→                      onVideoReady={handleVideoReady}
+   313→                      isAnalyzing={isAnalyzing}
+   314→                      disabled={isAnalyzing}
+   315→                    />
+   316→                  </div>
+   317→
+   318→                  {/* Video Tips */}
+   319→                  <div className="bg-muted/50 rounded-xl p-4 space-y-2">
+   320→                    <h4 className="font-medium text-sm flex items-center gap-2">
+   321→                      <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Tips for best results
+   322→                    </h4>
+   323→                    <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+   324→                      <li>Record from the <strong>side angle</strong> (perpendicular to the net)</li>
+   325→                      <li>Show the <strong>full approach and jump</strong> — not just the hit</li>
+   326→                      <li>Good lighting, steady camera</li>
+   327→                      <li>Wear contrasting clothing against the background</li>
+   328→                    </ul>
+   329→                  </div>
+   330→
+   331→                  {/* Error */}
+   332→                  {error && (
+   333→                    <div className="bg-destructive/10 text-destructive rounded-lg p-4 text-sm flex items-start gap-2">
+   334→                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+   335→                      <div>
+   336→                        <p className="font-medium">Analysis failed</p>
+   337→                        <p className="text-destructive/80">{error}</p>
+   338→                      </div>
+   339→                    </div>
+   340→                  )}
+   341→
+   342→                  {/* Action Buttons */}
+   343→                  <div className="flex flex-col sm:flex-row gap-3 pt-2">
+   344→                    <Button
+   345→                      size="lg"
+   346→                      className="flex-1 gap-2"
+   347→                      disabled={!canAnalyze}
+   348→                      onClick={handleAnalyze}
+   349→                    >
+   350→                      {isAnalyzing ? (
+   351→                        <>
+   352→                          <motion.div
+   353→                            animate={{ rotate: 360 }}
+   354→                            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+   355→                          >
+   356→                            <RotateCcw className="w-4 h-4" />
+   357→                          </motion.div>
+   358→                          Analyzing...
+   359→                        </>
+   360→                      ) : (
+   361→                        <>
+   362→                          <Brain className="w-4 h-4" /> Analyze My Spike
+   363→                        </>
+   364→                      )}
+   365→                    </Button>
+   366→                    {videoFile && !isAnalyzing && (
+   367→                      <Button variant="outline" size="lg" onClick={handleReset}>
+   368→                        Reset
+   369→                      </Button>
+   370→                    )}
+   371→                  </div>
+   372→                </CardContent>
+   373→              </Card>
+   374→            </TabsContent>
+   375→
+   376→            {/* Tab 2: Analysis */}
+   377→            <TabsContent value="analysis">
+   378→              {analysis ? (
+   379→                <AnalysisView
+   380→                  analysis={analysis}
+   381→                  playerName={profile.name}
+   382→                  onGeneratePlan={handleGeneratePlan}
+   383→                  isGenerating={isGeneratingPlan}
+   384→                  onReset={handleReset}
+   385→                />
+   386→              ) : (
+   387→                <Card className="p-8 text-center text-muted-foreground">
+   388→                  <Activity className="w-10 h-10 mx-auto mb-3 opacity-50" />
+   389→                  <p>Upload and analyze a video first to see your results.</p>
+   390→                </Card>
+   391→              )}
+   392→            </TabsContent>
+   393→
+   394→            {/* Tab 3: Training Plan */}
+   395→            <TabsContent value="training">
+   396→              {trainingPlan ? (
+   397→                <TrainingPlanView plan={trainingPlan} onReset={handleReset} />
+   398→              ) : analysis ? (
+   399→                <Card className="p-8 text-center">
+   400→                  <Dumbbell className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-50" />
+   401→                  <p className="text-muted-foreground mb-4">Your analysis is ready. Generate your personalized training plan.</p>
+   402→                  <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2">
+   403→                    {isGeneratingPlan ? (
+   404→                      <>
+   405→                        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+   406→                          <RotateCcw className="w-4 h-4" />
+   407→                        </motion.div>
+   408→                        Generating plan...
+   409→                      </>
+   410→                    ) : (
+   411→                      <>Generate 4-Week Plan <ChevronRight className="w-4 h-4" /></>
+   412→                    )}
+   413→                  </Button>
+   414→                </Card>
+   415→              ) : (
+   416→                <Card className="p-8 text-center text-muted-foreground">
+   417→                  <Dumbbell className="w-10 h-10 mx-auto mb-3 opacity-50" />
+   418→                  <p>Complete the analysis first, then generate your training plan.</p>
+   419→                </Card>
+   420→              )}
+   421→            </TabsContent>
+   422→          </Tabs>
+   423→        </section>
+   424→
+   425→        {/* Features */}
+   426→        <section id="features-section" className="bg-muted/30 py-16 sm:py-20">
+   427→          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+   428→            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
+   429→              Everything you need to actually fix your spike
+   430→            </h2>
+   431→            <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
+   432→              No more guessing. The AI watches your video and tells you exactly what&apos;s happening — then
+   433→              builds a plan around your real weaknesses.
+   434→            </p>
+   435→            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+   436→              {[
+   437→                { icon: Video, title: 'Video-Powered Analysis', desc: 'Upload a video of your spike. The AI analyzes 15 biomechanical checkpoints from actual movement data — not subjective self-assessment.' },
+   438→                { icon: Brain, title: 'AI Biomechanical Audit', desc: 'A vision model trained on sports biomechanics rates your approach, jump, contact, and landing with expert-level accuracy.' },
+   439→                { icon: Target, title: 'Strengths & Weaknesses Ranked', desc: 'See what you\'re already doing well and what\'s killing your spike — in priority order. Stop fixing what isn\'t broken.' },
+   440→                { icon: TrendingUp, title: 'Personalized 4-Week Plan', desc: 'Daily drills with sets, reps, and coaching cues organized around your weakest phases. Built for actual athletes.' },
+   441→                { icon: Activity, title: 'Phase-by-Phase Breakdown', desc: 'Separate scores for Approach, Jump, Contact, and Follow-Through. Know exactly which phase to attack first.' },
+   442→                { icon: ShieldCheck, title: 'Injury-First Mindset', desc: 'Landing balance and follow-through are scored as hard as power. The best spike is one you can repeat injury-free.' },
+   443→              ].map((f) => (
+   444→                <Card key={f.title} className="p-6">
+   445→                  <f.icon className="w-8 h-8 text-orange-500 mb-3" />
+   446→                  <h3 className="font-semibold mb-2">{f.title}</h3>
+   447→                  <p className="text-sm text-muted-foreground">{f.desc}</p>
+   448→                </Card>
+   449→              ))}
+   450→            </div>
+   451→          </div>
+   452→        </section>
+   453→
+   454→        {/* Science */}
+   455→        <section id="science-section" className="py-16 sm:py-20">
+   456→          <div className="max-w-4xl mx-auto px-4 sm:px-6">
+   457→            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
+   458→              The 4 phases of an elite spike
+   459→            </h2>
+   460→            <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
+   461→              Power in volleyball is not about arm strength — it&apos;s about the kinetic chain. Energy flows from the ground through the legs, hips, torso, shoulder, arm, and wrist into the ball.
+   462→            </p>
+   463→            <div className="space-y-8">
+   464→              {[
+   465→                {
+   466→                  phase: '1. The Approach',
+   467→                  icon: Footprints,
+   468→                  color: 'from-blue-500/10 to-cyan-500/10',
+   469→                  border: 'border-blue-500/20',
+   470→                  desc: 'A 3-step (or 4-step) approach where the last two steps are the longest and fastest. The second-to-last step converts horizontal momentum into vertical force.',
+   471→                  items: ['Approach speed', 'Last step length', 'Approach angle', 'Footwork rhythm', 'Arm swing back'],
+   472→                },
+   473→                {
+   474→                  phase: '2. The Jump',
+   475→                  icon: Activity,
+   476→                  color: 'from-violet-500/10 to-purple-500/10',
+   477→                  border: 'border-violet-500/20',
+   478→                  desc: 'Maximized by hip-shoulder separation. The hips stay closed while the shoulders rotate, storing elastic energy in the core — the engine of spiking power.',
+   479→                  items: ['Vertical jump conversion', 'Hip-shoulder rotation', 'Air body position'],
+   480→                },
+   481→                {
+   482→                  phase: '3. Arm Swing & Contact',
+   483→                  icon: Flame,
+   484→                  color: 'from-orange-500/10 to-amber-500/10',
+   485→                  border: 'border-orange-500/20',
+   486→                  desc: 'The hitting arm loads into a bow-and-arrow position, then whips through with internal shoulder rotation. Wrist snap generates topspin for a heavy, sharp ball.',
+   487→                  items: ['Bow-and-arrow position', 'Arm swing speed', 'Contact point', 'Wrist snap', 'Contact height'],
+   488→                },
+   489→                {
+   490→                  phase: '4. Follow-Through & Landing',
+   491→                  icon: ShieldCheck,
+   492→                  color: 'from-emerald-500/10 to-green-500/10',
+   493→                  border: 'border-emerald-500/20',
+   494→                  desc: 'The arm continues across the body to decelerate safely. A soft two-foot landing with knees bent protects joints and enables instant defensive transition.',
+   495→                  items: ['Follow-through', 'Landing balance'],
+   496→                },
+   497→              ].map((p) => (
+   498→                <Card key={p.phase} className={`p-6 bg-gradient-to-r ${p.color} border ${p.border}`}>
+   499→                  <div className="flex items-start gap-4">
+   500→                    <div className="w-10 h-10 rounded-lg bg-background/80 flex items-center justify-center shrink-0 mt-0.5">
+   501→                      <p.icon className="w-5 h-5" />
+   502→                    </div>
+   503→                    <div>
+   504→                      <h3 className="font-semibold text-lg mb-1">{p.phase}</h3>
+   505→                      <p className="text-sm text-muted-foreground mb-3">{p.desc}</p>
+   506→                      <div className="flex flex-wrap gap-2">
+   507→                        {p.items.map(item => (
+   508→                          <Badge key={item} variant="secondary" className="text-xs">{item}</Badge>
+   509→                        ))}
+   510→                      </div>
+   511→                    </div>
+   512→                  </div>
+   513→                </Card>
+   514→              ))}
+   515→            </div>
+   516→          </div>
+   517→        </section>
+   518→      </main>
+   519→
+   520→      {/* Footer */}
+   521→      <footer className="border-t py-8 mt-auto">
+   522→        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
+   523→          <div className="flex items-center gap-2">
+   524→            <Zap className="w-4 h-4" />
+   525→            <span className="font-medium text-foreground">SpikeLab</span>
+   526→            <span>Volleyball Spike Analysis & Training</span>
+   527→          </div>
+   528→          <p className="text-xs text-center sm:text-right max-w-md">
+   529→            Not a substitute for in-person coaching. Always warm up properly and consult a sports
+   530→            physiotherapist if you experience persistent pain.
+   531→          </p>
+   532→        </div>
+   533→      </footer>
+   534→    </div>
+   535→  )
+   536→}
+   537→
+   538→/* ─── Analysis View ──────────────────────────────────────────── */
+   539→
+   540→function AnalysisView({
+   541→  analysis,
+   542→  playerName,
+   543→  onGeneratePlan,
+   544→  isGenerating,
+   545→  onReset,
+   546→}: {
+   547→  analysis: SpikeAnalysis
+   548→  playerName: string
+   549→  onGeneratePlan: () => void
+   550→  isGenerating: boolean
+   551→  onReset: () => void
+   552→}) {
+   553→  const overallAvg = Math.round(
+   554→    Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 15
+   555→  )
+   556→
+   557→  const phases = [
+   558→    { key: 'approach' as const, label: 'Approach', icon: Footprints, color: 'text-blue-500' },
+   559→    { key: 'jump' as const, label: 'Jump & Rotation', icon: Activity, color: 'text-violet-500' },
+   560→    { key: 'contact' as const, label: 'Arm Swing & Contact', icon: Flame, color: 'text-orange-500' },
+   561→    { key: 'followThrough' as const, label: 'Follow-Through & Landing', icon: ShieldCheck, color: 'text-emerald-500' },
+   562→  ]
+   563→
+   564→  return (
+   565→    <div className="space-y-6">
+   566→      {/* Overall Score */}
+   567→      <Card className="overflow-hidden">
+   568→        <div className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
+   569→          <div className="flex flex-col sm:flex-row items-center gap-6">
+   570→            <div className="relative w-28 h-28 sm:w-32 sm:h-32">
+   571→              <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+   572→                <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" className="text-muted/30" strokeWidth="8" />
+   573→                <circle
+   574→                  cx="60" cy="60" r="52" fill="none"
+   575→                  stroke="currentColor" strokeWidth="8" strokeLinecap="round"
+   576→                  strokeDasharray={`${(overallAvg / 100) * 327} 327`}
+   577→                  className={getScoreColor(overallAvg)}
+   578→                />
+   579→              </svg>
+   580→              <div className="absolute inset-0 flex flex-col items-center justify-center">
+   581→                <span className="text-3xl font-bold">{overallAvg}</span>
+   582→                <span className="text-xs text-muted-foreground">/ 100</span>
+   583→              </div>
+   584→            </div>
+   585→            <div className="text-center sm:text-left flex-1">
+   586→              <div className="flex items-center gap-2 mb-2">
+   587→                <Badge variant="secondary">{analysis.estimatedLevel}</Badge>
+   588→                <Badge variant="outline" className="text-xs font-normal">
+   589→                  YOLOv8 Pose Tracking
+   590→                </Badge>
+   591→              </div>
+   592→              <h2 className="text-xl sm:text-2xl font-bold mb-1">
+   593→                {playerName ? `${playerName}'s` : 'Your'} Spike Analysis
+   594→              </h2>
+   595→              <p className="text-muted-foreground text-sm leading-relaxed">
+   596→                {analysis.coachNotes}
+   597→              </p>
+   598→            </div>
+   599→          </div>
+   600→        </div>
+   601→      </Card>
+   602→
+   603→      {/* Phase Scores */}
+   604→      <div className="grid sm:grid-cols-2 gap-4">
+   605→        {phases.map(({ key, label, icon: Icon, color }) => {
+   606→          const phase = analysis.phaseAnalysis[key]
+   607→          return (
+   608→            <Card key={key} className="p-5">
+   609→              <div className="flex items-center justify-between mb-3">
+   610→                <div className="flex items-center gap-2">
+   611→                  <Icon className={`w-5 h-5 ${color}`} />
+   612→                  <h3 className="font-semibold">{label}</h3>
+   613→                </div>
+   614→                <span className={`text-2xl font-bold ${getScoreColor(phase.score)}`}>{phase.score}</span>
+   615→              </div>
+   616→              <Progress value={phase.score} className="h-2 mb-3" />
+   617→              <p className="text-sm text-muted-foreground">{phase.feedback}</p>
+   618→            </Card>
+   619→          )
+   620→        })}
+   621→      </div>
+   622→
+   623→      {/* Detailed Checkpoint Scores */}
+   624→      <Card>
+   625→        <CardHeader>
+   626→          <CardTitle className="text-lg">All 15 Checkpoints</CardTitle>
+   627→        </CardHeader>
+   628→        <CardContent className="space-y-3">
+   629→          {(['approach', 'jump', 'contact', 'followThrough'] as const).map(phase => {
+   630→            const phaseCheckpoints = (Object.entries(analysis.scores) as [keyof CheckpointScores, number][])
+   631→              .filter(([k]) => CHECKPOINT_LABELS[k].phase === phase)
+   632→            const phaseLabel = phase === 'followThrough' ? 'Follow-Through' : phase.charAt(0).toUpperCase() + phase.slice(1)
+   633→            return (
+   634→              <div key={phase}>
+   635→                <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+   636→                  {phaseLabel}
+   637→                </h4>
+   638→                <div className="grid sm:grid-cols-2 gap-2">
+   639→                  {phaseCheckpoints.map(([key, score]) => (
+   640→                    <div key={key} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
+   641→                      <span className="text-sm">{CHECKPOINT_LABELS[key].label}</span>
+   642→                      <div className="flex items-center gap-2">
+   643→                        <span className={`text-sm font-semibold ${getScoreColor(score)}`}>{score}</span>
+   644→                        <Badge variant="outline" className={`text-[10px] ${getScoreColor(score)}`}>
+   645→                          {getScoreLabel(score)}
+   646→                        </Badge>
+   647→                      </div>
+   648→                    </div>
+   649→                  ))}
+   650→                </div>
+   651→              </div>
+   652→            )
+   653→          })}
+   654→        </CardContent>
+   655→      </Card>
+   656→
+   657→      {/* Strengths & Weaknesses */}
+   658→      <div className="grid sm:grid-cols-2 gap-4">
+   659→        <Card className="p-5">
+   660→          <h3 className="font-semibold mb-3 flex items-center gap-2">
+   661→            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Top Strengths
+   662→          </h3>
+   663→          <ul className="space-y-2">
+   664→            {analysis.topStrengths.map((s, i) => (
+   665→              <li key={i} className="text-sm text-muted-foreground flex gap-2">
+   666→                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+   667→                <span>{s}</span>
+   668→              </li>
+   669→            ))}
+   670→          </ul>
+   671→        </Card>
+   672→        <Card className="p-5">
+   673→          <h3 className="font-semibold mb-3 flex items-center gap-2">
+   674→            <AlertTriangle className="w-5 h-5 text-amber-500" /> Top Weaknesses
+   675→          </h3>
+   676→          <ul className="space-y-2">
+   677→            {analysis.topWeaknesses.map((w, i) => (
+   678→              <li key={i} className="text-sm text-muted-foreground flex gap-2">
+   679→                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+   680→                <span>{w}</span>
+   681→              </li>
+   682→            ))}
+   683→          </ul>
+   684→        </Card>
+   685→      </div>
+   686→
+   687→      {/* Actions */}
+   688→      <div className="flex flex-col sm:flex-row gap-3">
+   689→        <Button size="lg" className="flex-1 gap-2" onClick={onGeneratePlan} disabled={isGenerating}>
+   690→          {isGenerating ? (
+   691→            <>
+   692→              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+   693→                <RotateCcw className="w-4 h-4" />
+   694→              </motion.div>
+   695→              Generating plan...
+   696→            </>
+   697→          ) : (
+   698→            <>Generate 4-Week Training Plan <ArrowRight className="w-4 h-4" /></>
+   699→          )}
+   700→        </Button>
+   701→        <Button variant="outline" size="lg" onClick={onReset}>
+   702→          New Analysis
+   703→        </Button>
+   704→      </div>
+   705→    </div>
+   706→  )
+   707→}
+   708→
+   709→/* ─── Training Plan View ─────────────────────────────────────── */
+   710→
+   711→function TrainingPlanView({
+   712→  plan,
+   713→  onReset,
+   714→}: {
+   715→  plan: TrainingPlan
+   716→  onReset: () => void
+   717→}) {
+   718→  const [openVideo, setOpenVideo] = useState<string | null>(null)
+   719→
+   720→  function getYouTubeId(url: string): string | null {
+   721→    const match = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
+   722→    return match ? match[1] : null
+   723→  }
+   724→
+   725→  function toggleVideo(drillKey: string) {
+   726→    setOpenVideo(prev => prev === drillKey ? null : drillKey)
+   727→  }
+   728→
+   729→  return (
+   730→    <div className="space-y-6">
+   731→      <Card className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
+   732→        <h2 className="text-xl sm:text-2xl font-bold mb-2">Your 4-Week Training Plan</h2>
+   733→        <p className="text-muted-foreground mb-4">{plan.summary}</p>
+   734→        <div className="flex flex-wrap gap-2">
+   735→          {plan.keyFocus.map(f => (
+   736→            <Badge key={f} variant="secondary"><Target className="w-3 h-3 mr-1" />{f}</Badge>
+   737→          ))}
+   738→        </div>
+   739→      </Card>
+   740→
+   741→      <AnimatePresence>
+   742→        {plan.weeks.map((week) => (
+   743→          <motion.div
+   744→            key={week.week}
+   745→            initial={{ opacity: 0, y: 20 }}
+   746→            animate={{ opacity: 1, y: 0 }}
+   747→            transition={{ delay: week.week * 0.1 }}
+   748→          >
+   749→            <Card className="overflow-hidden">
+   750→              <CardHeader className="bg-muted/30">
+   751→                <div className="flex items-center justify-between">
+   752→                  <div>
+   753→                    <Badge variant="outline" className="mb-1">Week {week.week}</Badge>
+   754→                    <CardTitle className="text-lg">{week.title}</CardTitle>
+   755→                  </div>
+   756→                </div>
+   757→                <p className="text-sm text-muted-foreground">{week.focus}</p>
+   758→              </CardHeader>
+   759→              <CardContent className="p-4">
+   760→                <div className="space-y-3">
+   761→                  {week.days.map((day) => (
+   762→                    <div key={day.day} className="border rounded-lg p-3">
+   763→                      <div className="flex items-center justify-between mb-2">
+   764→                        <h4 className="font-medium text-sm">{day.day}</h4>
+   765→                        <Badge variant="secondary" className="text-xs">{day.phase}</Badge>
+   766→                      </div>
+   767→                      <div className="space-y-2">
+   768→                        {day.drills.map((drill, i) => {
+   769→                          const videoId = drill.videoUrl ? getYouTubeId(drill.videoUrl) : null
+   770→                          const drillKey = `${week.week}-${day.day}-${i}`
+   771→                          const isOpen = openVideo === drillKey
+   772→                          const needsEquipment = drill.equipment && drill.equipment !== 'None'
+   773→                          return (
+   774→                            <div key={i} className="bg-muted/30 rounded-md p-2.5">
+   775→                              <div className="flex items-start justify-between gap-2">
+   776→                                <div className="flex-1 min-w-0">
+   777→                                  <div className="flex items-center gap-2 flex-wrap">
+   778→                                    <p className="text-sm font-medium">{drill.name}</p>
+   779→                                    {needsEquipment && (
+   780→                                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
+   781→                                        <Package className="w-3 h-3" />
+   782→                                        {drill.equipment}
+   783→                                      </span>
+   784→                                    )}
+   785→                                    {videoId && (
+   786→                                      <button
+   787→                                        onClick={() => toggleVideo(drillKey)}
+   788→                                        className="inline-flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-400 transition-colors shrink-0"
+   789→                                      >
+   790→                                        <Youtube className="w-3.5 h-3.5" />
+   791→                                        {isOpen ? 'Hide' : 'Watch'}
+   792→                                        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+   793→                                      </button>
+   794→                                    )}
+   795→                                  </div>
+   796→                                  {drill.cue && (
+   797→                                    <p className="text-xs text-muted-foreground mt-0.5 italic">
+   798→                                      &quot;{drill.cue}&quot;
+   799→                                    </p>
+   800→                                  )}
+   801→                                  {needsEquipment && drill.noEquipmentAlt && (
+   802→                                    <div className="mt-1.5 flex items-start gap-1.5 bg-emerald-500/5 border border-emerald-500/20 rounded-md px-2 py-1.5">
+   803→                                      <Lightbulb className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
+   804→                                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 leading-relaxed">
+   805→                                        <span className="font-semibold">No equipment?</span> {drill.noEquipmentAlt}
+   806→                                      </p>
+   807→                                    </div>
+   808→                                  )}
+   809→                                </div>
+   810→                                <div className="text-right shrink-0">
+   811→                                  <p className="text-xs font-medium">{drill.sets} × {drill.reps}</p>
+   812→                                  {drill.duration && (
+   813→                                    <p className="text-xs text-muted-foreground">{drill.duration}</p>
+   814→                                  )}
+   815→                                </div>
+   816→                              </div>
+   817→                              <AnimatePresence>
+   818→                                {isOpen && videoId && (
+   819→                                  <motion.div
+   820→                                    initial={{ height: 0, opacity: 0 }}
+   821→                                    animate={{ height: 'auto', opacity: 1 }}
+   822→                                    exit={{ height: 0, opacity: 0 }}
+   823→                                    transition={{ duration: 0.25, ease: 'easeInOut' }}
+   824→                                    className="overflow-hidden"
+   825→                                  >
+   826→                                    <div className="mt-3 rounded-lg overflow-hidden border bg-black">
+   827→                                      <iframe
+   828→                                        className="w-full aspect-video"
+   829→                                        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1&start=${drill.videoStart || 0}`}
+   830→                                        title={`${drill.name} Tutorial`}
+   831→                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+   832→                                        allowFullScreen
+   833→                                      />
+   834→                                    </div>
+   835→                                  </motion.div>
+   836→                                )}
+   837→                              </AnimatePresence>
+   838→                            </div>
+   839→                          )
+   840→                        })}
+   841→                      </div>
+   842→                    </div>
+   843→                  ))}
+   844→                </div>
+   845→              </CardContent>
+   846→            </Card>
+   847→          </motion.div>
+   848→        ))}
+   849→      </AnimatePresence>
+   850→
+   851→      <div className="flex justify-center pt-4">
+   852→        <Button variant="outline" size="lg" onClick={onReset} className="gap-2">
+   853→          <RotateCcw className="w-4 h-4" /> Start Over
+   854→        </Button>
+   855→      </div>
+   856→    </div>
+   857→  )
+   858→}

@@ -1,0 +1,644 @@
+     1→     1→export type Lang = 'en' | 'ru' | 'uz'
+     2→     2→
+     3→     3→export const LANG_LABELS: Record<Lang, string> = {
+     4→     4→  en: 'Eng',
+     5→     5→  ru: 'Рус',
+     6→     6→  uz: 'Oʻzb',
+     7→     7→}
+     8→     8→
+     9→     9→export const LANG_FLAGS: Record<Lang, string> = {
+    10→    10→  en: '🇬🇧',
+    11→    11→  ru: '🇷🇺',
+    12→    12→  uz: '🇺🇿',
+    13→    13→}
+    14→    14→
+    15→    15→/* ──────────────────────────────────────────────────────────── */
+    16→    16→
+    17→    17→type Translations = typeof en
+    18→    18→
+    19→    19→const en = {
+    20→    20→  // Header
+    21→    21→  header: {
+    22→    22→    subtitle: 'Volleyball Spike Analysis',
+    23→    23→    nav: {
+    24→    24→      analyze: 'Analyze',
+    25→    25→      features: 'Features',
+    26→    26→      science: 'The Science',
+    27→    27→    },
+    28→    28→  },
+    29→    29→
+    30→    30→  // Loading
+    31→    31→  loading: 'Loading SpikeLab...',
+    32→    32→
+    33→    33→  // Hero
+    34→    34→  hero: {
+    35→    35→    badge: 'Video-Powered Analysis',
+    36→    36→    title1: 'Upload your spike.',
+    37→    37→    titleHighlight: 'Get the truth.',
+    38→    38→    description: 'AI watches your spike video and rates 15 biomechanical checkpoints. No guessing, no subjective sliders. Just real data from your real movement.',
+    39→    39→    pill1: 'AI biomechanical audit',
+    40→    40→    pill2: 'Strengths & weaknesses ranked',
+    41→    41→    pill3: 'Personalized 4-week plan',
+    42→    42→  },
+    43→    43→
+    44→    44→  // Tabs
+    45→    45→  tabs: {
+    46→    46→    upload: '1. Upload Video',
+    47→    47→    analysis: '2. Analysis',
+    48→    48→    training: '3. Training Plan',
+    49→    49→  },
+    50→    50→
+    51→    51→  // Upload Tab
+    52→    52→  upload: {
+    53→    53→    profileTitle: 'Player Profile',
+    54→    54→    profileDesc: 'Optional. Helps calibrate your results against position-level benchmarks.',
+    55→    55→    nameLabel: 'Name / Nickname',
+    56→    56→    namePlaceholder: 'Your name',
+    57→    57→    positionLabel: 'Position',
+    58→    58→    experienceLabel: 'Experience',
+    59→    59→    videoTitle: 'Upload Your Spike Video',
+    60→    60→    videoDesc: 'Record yourself performing a full spike approach and hit. Side angle works best.',
+    61→    61→    tipsTitle: 'Tips for best results',
+    62→    62→    tip1: 'Record from the side angle (perpendicular to the net)',
+    63→    63→    tip2: 'Show the full approach and jump — not just the hit',
+    64→    64→    tip3: 'Good lighting, steady camera',
+    65→    65→    tip4: 'Wear contrasting clothing against the background',
+    66→    66→    errorTitle: 'Analysis failed',
+    67→    67→    analyzeBtn: 'Analyze My Spike',
+    68→    68→    analyzingBtn: 'Analyzing...',
+    69→    69→    resetBtn: 'Reset',
+    70→    70→  },
+    71→    71→
+    72→    72→  // Video Uploader
+    73→    73→  uploader: {
+    74→    74→    dropHere: 'Drop your spike video here',
+    75→    75→    orBrowse: 'or click to browse',
+    76→    76→    formats: 'MP4, MOV, AVI, WebM — up to 50MB',
+    77→    77→    remove: 'Remove',
+    78→    78→    readyToAnalyze: 'Ready to analyze',
+    79→    79→    analyzing: 'Analyzing your spike with AI...',
+    80→    80→    analyzingSub: 'YOLOv8 pose tracking every frame — about 5-15 seconds',
+    81→    81→  },
+    82→    82→
+    83→    83→  // Analysis Tab
+    84→    84→  analysis: {
+    85→    85→    emptyMsg: 'Upload and analyze a video first to see your results.',
+    86→    86→    yourSpikeAnalysis: "Spike Analysis",
+    87→    87→    allCheckpoints: 'All 15 Checkpoints',
+    88→    88→    topStrengths: 'Top Strengths',
+    89→    89→    topWeaknesses: 'Top Weaknesses',
+    90→    90→    generateBtn: 'Generate 4-Week Training Plan',
+    91→    91→    generatingBtn: 'Generating plan...',
+    92→    92→    newAnalysisBtn: 'New Analysis',
+    93→    93→    phaseApproach: 'Approach',
+    94→    94→    phaseJump: 'Jump & Rotation',
+    95→    95→    phaseContact: 'Arm Swing & Contact',
+    96→    96→    phaseFollowThrough: 'Follow-Through & Landing',
+    97→    97→    phaseLabelApproach: 'Approach',
+    98→    98→    phaseLabelJump: 'Jump',
+    99→    99→    phaseLabelContact: 'Contact',
+   100→   100→    phaseLabelFollowThrough: 'Follow-Through',
+   101→   101→  },
+   102→   102→
+   103→   103→  // Training Tab
+   104→   104→  training: {
+   105→   105→    title: 'Your 4-Week Training Plan',
+   106→   106→    emptyMsg: 'Complete the analysis first, then generate your training plan.',
+   107→   107→    readyMsg: 'Your analysis is ready. Generate your personalized training plan.',
+   108→   108→    generateBtn: 'Generate 4-Week Plan',
+   109→   109→    generatingBtn: 'Generating plan...',
+   110→   110→    week: 'Week',
+   111→   111→    watch: 'Watch',
+   112→   112→    hide: 'Hide',
+   113→   113→    noEquipment: 'No equipment?',
+   114→   114→    startOver: 'Start Over',
+   115→   115→  },
+   116→   116→
+   117→   117→  // Features Section
+   118→   118→  features: {
+   119→   119→    title: 'Everything you need to actually fix your spike',
+   120→   120→    description: "No more guessing. The AI watches your video and tells you exactly what's happening — then builds a plan around your real weaknesses.",
+   121→   121→    cards: [
+   122→   122→      {
+   123→   123→        title: 'Video-Powered Analysis',
+   124→   124→        desc: 'Upload a video of your spike. The AI analyzes 15 biomechanical checkpoints from actual movement data — not subjective self-assessment.',
+   125→   125→      },
+   126→   126→      {
+   127→   127→        title: 'AI Biomechanical Audit',
+   128→   128→        desc: 'A vision model trained on sports biomechanics rates your approach, jump, contact, and landing with expert-level accuracy.',
+   129→   129→      },
+   130→   130→      {
+   131→   131→        title: 'Strengths & Weaknesses Ranked',
+   132→   132→        desc: "See what you're already doing well and what's killing your spike — in priority order. Stop fixing what isn't broken.",
+   133→   133→      },
+   134→   134→      {
+   135→   135→        title: 'Personalized 4-Week Plan',
+   136→   136→        desc: 'Daily drills with sets, reps, and coaching cues organized around your weakest phases. Built for actual athletes.',
+   137→   137→      },
+   138→   138→      {
+   139→   139→        title: 'Phase-by-Phase Breakdown',
+   140→   140→        desc: 'Separate scores for Approach, Jump, Contact, and Follow-Through. Know exactly which phase to attack first.',
+   141→   141→      },
+   142→   142→      {
+   143→   143→        title: 'Injury-First Mindset',
+   144→   144→        desc: 'Landing balance and follow-through are scored as hard as power. The best spike is one you can repeat injury-free.',
+   145→   145→      },
+   146→   146→    ],
+   147→   147→  },
+   148→   148→
+   149→   149→  // Science Section
+   150→   150→  science: {
+   151→   151→    title: 'The 4 phases of an elite spike',
+   152→   152→    description: "Power in volleyball is not about arm strength — it's about the kinetic chain. Energy flows from the ground through the legs, hips, torso, shoulder, arm, and wrist into the ball.",
+   153→   153→    phases: [
+   154→   154→      {
+   155→   155→        title: '1. The Approach',
+   156→   156→        desc: 'A 3-step (or 4-step) approach where the last two steps are the longest and fastest. The second-to-last step converts horizontal momentum into vertical force.',
+   157→   157→        items: ['Approach speed', 'Last step length', 'Approach angle', 'Footwork rhythm', 'Arm swing back'],
+   158→   158→      },
+   159→   159→      {
+   160→   160→        title: '2. The Jump',
+   161→   161→        desc: 'Maximized by hip-shoulder separation. The hips stay closed while the shoulders rotate, storing elastic energy in the core — the engine of spiking power.',
+   162→   162→        items: ['Vertical jump conversion', 'Hip-shoulder rotation', 'Air body position'],
+   163→   163→      },
+   164→   164→      {
+   165→   165→        title: '3. Arm Swing & Contact',
+   166→   166→        desc: 'The hitting arm loads into a bow-and-arrow position, then whips through with internal shoulder rotation. Wrist snap generates topspin for a heavy, sharp ball.',
+   167→   167→        items: ['Bow-and-arrow position', 'Arm swing speed', 'Contact point', 'Wrist snap', 'Contact height'],
+   168→   168→      },
+   169→   169→      {
+   170→   170→        title: '4. Follow-Through & Landing',
+   171→   171→        desc: 'The arm continues across the body to decelerate safely. A soft two-foot landing with knees bent protects joints and enables instant defensive transition.',
+   172→   172→        items: ['Follow-through', 'Landing balance'],
+   173→   173→      },
+   174→   174→    ],
+   175→   175→  },
+   176→   176→
+   177→   177→  // Footer
+   178→   178→  footer: {
+   179→   179→    subtitle: 'Volleyball Spike Analysis & Training',
+   180→   180→    disclaimer: 'Not a substitute for in-person coaching. Always warm up properly and consult a sports physiotherapist if you experience persistent pain.',
+   181→   181→  },
+   182→   182→
+   183→   183→  // Score Labels
+   184→   184→  scoreLabels: {
+   185→   185→    elite: 'Elite',
+   186→   186→    excellent: 'Excellent',
+   187→   187→    decent: 'Decent',
+   188→   188→    needsWork: 'Needs Work',
+   189→   189→    critical: 'Critical',
+   190→   190→  },
+   191→   191→
+   192→   192→  // Positions
+   193→   193→  positions: [
+   194→   194→    'Outside Hitter',
+   195→   195→    'Opposite',
+   196→   196→    'Middle Blocker',
+   197→   197→    'Setter',
+   198→   198→    'Libero',
+   199→   199→    'Right Side',
+   200→   200→  ],
+   201→   201→  positionLabels: {
+   202→   202→    'Outside Hitter': 'Outside Hitter',
+   203→   203→    'Opposite': 'Opposite',
+   204→   204→    'Middle Blocker': 'Middle Blocker',
+   205→   205→    'Setter': 'Setter',
+   206→   206→    'Libero': 'Libero',
+   207→   207→    'Right Side': 'Right Side',
+   208→   208→  },
+   209→   209→
+   210→   210→  // Experience Levels
+   211→   211→  experienceLevels: [
+   212→   212→    'Beginner (< 2 years)',
+   213→   213→    'Intermediate (2-5 years)',
+   214→   214→    'Advanced (5-10 years)',
+   215→   215→    'Elite (10+ years)',
+   216→   216→  ],
+   217→   217→  experienceLabels: {
+   218→   218→    'Beginner (< 2 years)': 'Beginner (< 2 years)',
+   219→   219→    'Intermediate (2-5 years)': 'Intermediate (2-5 years)',
+   220→   220→    'Advanced (5-10 years)': 'Advanced (5-10 years)',
+   221→   221→    'Elite (10+ years)': 'Elite (10+ years)',
+   222→   222→  },
+   223→   223→
+   224→   224→  // Checkpoint Labels
+   225→   225→  checkpoints: {
+   226→   226→    approach_speed: 'Approach Speed',
+   227→   227→    approach_angle: 'Approach Angle',
+   228→   228→    last_step_length: 'Last Step Length',
+   229→   229→    footwork_rhythm: 'Footwork Rhythm',
+   230→   230→    arms_swing_back: 'Arms Swing Back on Plant',
+   231→   231→    vertical_jump_conversion: 'Vertical Jump Conversion',
+   232→   232→    hip_shoulder_rotation: 'Hip-Shoulder Rotation',
+   233→   233→    body_position_air: 'Body Position in Air',
+   234→   234→    bow_and_arrow: 'Bow-and-Arrow Position',
+   235→   235→    arm_swing_speed: 'Arm Swing Speed',
+   236→   236→    contact_point: 'Contact Point',
+   237→   237→    wrist_snap: 'Wrist Snap (Topspin)',
+   238→   238→    contact_height: 'Contact Height',
+   239→   239→    follow_through: 'Follow-Through',
+   240→   240→    landing_balance: 'Landing Balance',
+   241→   241→  },
+   242→   242→
+   243→   243→  // Error messages
+   244→   244→  errors: {
+   245→   245→    analysisFailed: 'Analysis failed',
+   246→   246→    unexpectedFormat: 'Unexpected response format from analysis',
+   247→   247→    timeout: 'Analysis timed out. Please try with a shorter video.',
+   248→   248→    somethingWentWrong: 'Something went wrong',
+   249→   249→    planFailed: 'Plan generation failed',
+   250→   250→    planGenerateFailed: 'Failed to generate plan',
+   251→   251→  },
+   252→   252→} as const
+   253→   253→
+   254→   254→/* ──────────────────────────────────────────────────────────── */
+   255→   255→
+   256→   256→const ru: Translations = {
+   257→   257→  header: {
+   258→   258→    subtitle: 'Анализ нападающего удара по волейболу',
+   259→   259→    nav: {
+   260→   260→      analyze: 'Анализ',
+   261→   261→      features: 'Возможности',
+   262→   262→      science: 'Наука',
+   263→   263→    },
+   264→   264→  },
+   265→   265→  loading: 'Загрузка SpikeLab...',
+   266→   266→  hero: {
+   267→   267→    badge: 'Видеоанализ',
+   268→   268→    title1: 'Загрузите ваш удар.',
+   269→   269→    titleHighlight: 'Узнайте правду.',
+   270→   270→    description: 'ИИ анализирует ваше видео нападающего удара и оценивает 15 биомеханических показателей. Никаких догадок, никаких субъективных ползунков. Только реальные данные вашего движения.',
+   271→   271→    pill1: 'ИИ биомеханический аудит',
+   272→   272→    pill2: 'Сильные и слабые стороны по рангу',
+   273→   273→    pill3: 'Персональный план на 4 недели',
+   274→   274→  },
+   275→   275→  tabs: {
+   276→   276→    upload: '1. Загрузить видео',
+   277→   277→    analysis: '2. Анализ',
+   278→   278→    training: '3. Тренировочный план',
+   279→   279→  },
+   280→   280→  upload: {
+   281→   281→    profileTitle: 'Профиль игрока',
+   282→   282→    profileDesc: 'Необязательно. Помогает калибровать результаты по нормативам позиции.',
+   283→   283→    nameLabel: 'Имя / Псевдоним',
+   284→   284→    namePlaceholder: 'Ваше имя',
+   285→   285→    positionLabel: 'Позиция',
+   286→   286→    experienceLabel: 'Опыт',
+   287→   287→    videoTitle: 'Загрузите видео нападающего удара',
+   288→   288→    videoDesc: 'Запишите полный разбег и удар. Боковой угол лучше всего.',
+   289→   289→    tipsTitle: 'Советы для лучшего результата',
+   290→   290→    tip1: 'Снимайте сбоку (перпендикулярно сетке)',
+   291→   291→    tip2: 'Покажите полный разбег и прыжок — не только удар',
+   292→   292→    tip3: 'Хорошее освещение, устойчивая камера',
+   293→   293→    tip4: 'Одежда должна контрастировать с фоном',
+   294→   294→    errorTitle: 'Ошибка анализа',
+   295→   295→    analyzeBtn: 'Анализировать мой удар',
+   296→   296→    analyzingBtn: 'Анализ...',
+   297→   297→    resetBtn: 'Сбросить',
+   298→   298→  },
+   299→   299→  uploader: {
+   300→   300→    dropHere: 'Перетащите видео вашего удара сюда',
+   301→   301→    orBrowse: 'или нажмите для выбора',
+   302→   302→    formats: 'MP4, MOV, AVI, WebM — до 50 МБ',
+   303→   303→    remove: 'Удалить',
+   304→   304→    readyToAnalyze: 'Готово к анализу',
+   305→   305→    analyzing: 'ИИ анализирует ваш удар...',
+   306→   306→    analyzingSub: 'YOLOv8 отслеживание позы каждый кадр — около 5-15 секунд',
+   307→   307→  },
+   308→   308→  analysis: {
+   309→   309→    emptyMsg: 'Сначала загрузите и проанализируйте видео, чтобы увидеть результаты.',
+   310→   310→    yourSpikeAnalysis: 'Анализ нападающего удара',
+   311→   311→    allCheckpoints: 'Все 15 показателей',
+   312→   312→    topStrengths: 'Сильные стороны',
+   313→   313→    topWeaknesses: 'Слабые стороны',
+   314→   314→    generateBtn: 'Создать план на 4 недели',
+   315→   315→    generatingBtn: 'Создание плана...',
+   316→   316→    newAnalysisBtn: 'Новый анализ',
+   317→   317→    phaseApproach: 'Разбег',
+   318→   318→    phaseJump: 'Прыжок и вращение',
+   319→   319→    phaseContact: 'Замах и контакт',
+   320→   320→    phaseFollowThrough: 'Проводка и приземление',
+   321→   321→    phaseLabelApproach: 'Разбег',
+   322→   322→    phaseLabelJump: 'Прыжок',
+   323→   323→    phaseLabelContact: 'Контакт',
+   324→   324→    phaseLabelFollowThrough: 'Проводка',
+   325→   325→  },
+   326→   326→  training: {
+   327→   327→    title: 'Ваш тренировочный план на 4 недели',
+   328→   328→    emptyMsg: 'Сначала пройдите анализ, затем создайте тренировочный план.',
+   329→   329→    readyMsg: 'Ваш анализ готов. Создайте персональный тренировочный план.',
+   330→   330→    generateBtn: 'Создать план на 4 недели',
+   331→   331→    generatingBtn: 'Создание плана...',
+   332→   332→    week: 'Неделя',
+   333→   333→    watch: 'Смотреть',
+   334→   334→    hide: 'Скрыть',
+   335→   335→    noEquipment: 'Нет инвентаря?',
+   336→   336→    startOver: 'Начать заново',
+   337→   337→  },
+   338→   338→  features: {
+   339→   339→    title: 'Всё, что нужно для реального улучшения вашего удара',
+   340→   340→    description: 'Никаких догадок. ИИ смотрит ваше видео и говорит, что именно происходит — а затем строит план вокруг ваших реальных слабостей.',
+   341→   341→    cards: [
+   342→   342→      {
+   343→   343→        title: 'Видеоанализ',
+   344→   344→        desc: 'Загрузите видео вашего удара. ИИ анализирует 15 биомеханических показателей по реальным данным движения — без субъективной самооценки.',
+   345→   345→      },
+   346→   346→      {
+   347→   347→        title: 'ИИ биомеханический аудит',
+   348→   348→        desc: 'Модель компьютерного зрения обучена на спортивной биомеханике и оценивает разбег, прыжок, контакт и приземление с экспертной точностью.',
+   349→   349→      },
+   350→   350→      {
+   351→   351→        title: 'Рейтинг сильных и слабых сторон',
+   352→   352→        desc: 'Узнайте, что вы уже делаете хорошо, и что мешает вашему удару — в порядке приоритета. Не чините то, что не сломано.',
+   353→   353→      },
+   354→   354→      {
+   355→   355→        title: 'Персональный план на 4 недели',
+   356→   356→        desc: 'Ежедневные упражнения с подходами, повторениями и тренерскими подсказками, организованные вокруг ваших слабых фаз.',
+   357→   357→      },
+   358→   358→      {
+   359→   359→        title: 'Анализ по фазам',
+   360→   360→        desc: 'Отдельные оценки для разбега, прыжка, контакта и проводки. Точно знайте, какую фазу атаковать первой.',
+   361→   361→      },
+   362→   362→      {
+   363→   363→        title: 'Приоритет безопасности',
+   364→   364→        desc: 'Баланс при приземлении и проводка оцениваются так же строго, как сила. Лучший удар — тот, который можно повторить без травм.',
+   365→   365→      },
+   366→   366→    ],
+   367→   367→  },
+   368→   368→  science: {
+   369→   369→    title: '4 фазы элитного нападающего удара',
+   370→   370→    description: 'Сила в волейболе — это не сила рук. Это кинетическая цепь. Энергия проходит от земли через ноги, бёдра, корпус, плечо, руку и запястье в мяч.',
+   371→   371→    phases: [
+   372→   372→      {
+   373→   373→        title: '1. Разбег',
+   374→   374→        desc: '3-шаговый (или 4-шаговый) разбег, где последние два шага самые длинные и быстрые. Предпоследний шаг преобразует горизонтальный импульс в вертикальную силу.',
+   375→   375→        items: ['Скорость разбега', 'Длина последнего шага', 'Угол разбега', 'Ритм шагов', 'Отведение рук назад'],
+   376→   376→      },
+   377→   377→      {
+   378→   378→        title: '2. Прыжок',
+   379→   379→        desc: 'Максимизируется за счёт разделения бёдер и плеч. Бёдра остаются закрытыми, а плечи вращаются, накапливая упругую энергию в корпусе — двигателе силы удара.',
+   380→   380→        items: ['Вертикальное преобразование', 'Вращение бёдра-плеча', 'Положение тела в воздухе'],
+   381→   381→      },
+   382→   382→      {
+   383→   383→        title: '3. Замах и контакт',
+   384→   384→        desc: 'Бьющая рука нагружается в положение «лук и стрела», затем взмахивается с внутренним вращением плеча. Щелчок запястьем создаёт верхнее вращение для тяжёлого резкого мяча.',
+   385→   385→        items: ['Положение «лук и стрела»', 'Скорость взмаха', 'Точка контакта', 'Щелчок запястьем', 'Высота контакта'],
+   386→   386→      },
+   387→   387→      {
+   388→   388→        title: '4. Проводка и приземление',
+   389→   389→        desc: 'Рука продолжает движение через корпус для безопасного замедления. Мягкое приземление на обе ноги с согнутыми коленями защищает суставы и обеспечивает мгновенный переход к защите.',
+   390→   390→        items: ['Проводка', 'Баланс при приземлении'],
+   391→   391→      },
+   392→   392→    ],
+   393→   393→  },
+   394→   394→  footer: {
+   395→   395→    subtitle: 'Анализ и тренировка нападающего удара по волейболу',
+   396→   396→    disclaimer: 'Не заменяет очное обучение тренера. Всегда хорошо разогревайтесь и проконсультируйтесь со спортивным физиотерапевтом при постоянной боли.',
+   397→   397→  },
+   398→   398→  scoreLabels: {
+   399→   399→    elite: 'Элита',
+   400→   400→    excellent: 'Отлично',
+   401→   401→    decent: 'Нормально',
+   402→   402→    needsWork: 'Требует работы',
+   403→   403→    critical: 'Критично',
+   404→   404→  },
+   405→   405→  positions: ['Outside Hitter', 'Opposite', 'Middle Blocker', 'Setter', 'Libero', 'Right Side'],
+   406→   406→  positionLabels: {
+   407→   407→    'Outside Hitter': 'Доигровщик',
+   408→   408→    'Opposite': 'Нападающий',
+   409→   409→    'Middle Blocker': 'Центральный блокирующий',
+   410→   410→    'Setter': 'Связующий',
+   411→   411→    'Libero': 'Либеро',
+   412→   412→    'Right Side': 'Правый нападающий',
+   413→   413→  },
+   414→   414→  experienceLevels: ['Beginner (< 2 years)', 'Intermediate (2-5 years)', 'Advanced (5-10 years)', 'Elite (10+ years)'],
+   415→   415→  experienceLabels: {
+   416→   416→    'Beginner (< 2 years)': 'Новичок (до 2 лет)',
+   417→   417→    'Intermediate (2-5 years)': 'Средний (2-5 лет)',
+   418→   418→    'Advanced (5-10 years)': 'Продвинутый (5-10 лет)',
+   419→   419→    'Elite (10+ years)': 'Элита (10+ лет)',
+   420→   420→  },
+   421→   421→  checkpoints: {
+   422→   422→    approach_speed: 'Скорость разбега',
+   423→   423→    approach_angle: 'Угол разбега',
+   424→   424→    last_step_length: 'Длина последнего шага',
+   425→   425→    footwork_rhythm: 'Ритм шагов',
+   426→   426→    arms_swing_back: 'Отведение рук при постановке',
+   427→   427→    vertical_jump_conversion: 'Вертикальное преобразование',
+   428→   428→    hip_shoulder_rotation: 'Вращение бёдер-плеч',
+   429→   429→    body_position_air: 'Положение тела в воздухе',
+   430→   430→    bow_and_arrow: 'Положение «лук и стрела»',
+   431→   431→    arm_swing_speed: 'Скорость взмаха',
+   432→   432→    contact_point: 'Точка контакта',
+   433→   433→    wrist_snap: 'Щелчок запястьем (верхнее вращение)',
+   434→   434→    contact_height: 'Высота контакта',
+   435→   435→    follow_through: 'Проводка',
+   436→   436→    landing_balance: 'Баланс при приземлении',
+   437→   437→  },
+   438→   438→  errors: {
+   439→   439→    analysisFailed: 'Ошибка анализа',
+   440→   440→    unexpectedFormat: 'Неожиданный формат ответа анализа',
+   441→   441→    timeout: 'Анализ превысил время. Попробуйте более короткое видео.',
+   442→   442→    somethingWentWrong: 'Что-то пошло не так',
+   443→   443→    planFailed: 'Ошибка создания плана',
+   444→   444→    planGenerateFailed: 'Не удалось создать план',
+   445→   445→  },
+   446→   446→}
+   447→   447→
+   448→   448→/* ──────────────────────────────────────────────────────────── */
+   449→   449→
+   450→   450→const uz: Translations = {
+   451→   451→  header: {
+   452→   452→    subtitle: 'Voleybol hujum zarbasi tahlili',
+   453→   453→    nav: {
+   454→   454→      analyze: 'Tahlil',
+   455→   455→      features: 'Imkoniyatlar',
+   456→   456→      science: 'Fan',
+   457→   457→    },
+   458→   458→  },
+   459→   459→  loading: 'SpikeLab yuklanmoqda...',
+   460→   460→  hero: {
+   461→   461→    badge: 'Video-tahlil',
+   462→   462→    title1: 'Hujum zarbangizni yuklang.',
+   463→   463→    titleHighlight: 'Haqiqatni bilib oling.',
+   464→   464→    description: 'Sun\'iy intellekt hujum zarbasi videongizni ko\'radi va 15 biomekanik ko\'rsatkichni baholaydi. Hech qanday taxmin, hech qanday subyektiv slayderlar. Faqat haqiqiy harakatlaringizdan haqiqiy ma\'lumotlar.',
+   465→   465→    pill1: 'SI biomekanik audit',
+   466→   466→    pill2: 'Kuchli va zaif tomonlar reytingi',
+   467→   467→    pill3: 'Shaxsiy 4 haftalik reja',
+   468→   468→  },
+   469→   469→  tabs: {
+   470→   470→    upload: '1. Video yuklash',
+   471→   471→    analysis: '2. Tahlil',
+   472→   472→    training: '3. Mashg\'ulat rejasi',
+   473→   473→  },
+   474→   474→  upload: {
+   475→   475→    profileTitle: 'O\'yinchining profili',
+   476→   476→    profileDesc: 'Ixtiyoriy. Natijalaringizni pozitsiya darajasidagi me\'yorga moslashtirishga yordam beradi.',
+   477→   477→    nameLabel: 'Ism / Taxallus',
+   478→   478→    namePlaceholder: 'Ismingiz',
+   479→   479→    positionLabel: 'Pozitsiya',
+   480→   480→    experienceLabel: 'Tajriba',
+   481→   481→    videoTitle: 'Hujum zarbasi videongizni yuklang',
+   482→   482→    videoDesc: 'To\'liq yondashuv va zarba bajaring. Yon burchak eng yaxshi natija beradi.',
+   483→   483→    tipsTitle: 'Eng yaxshi natija uchun maslahatlar',
+   484→   484→    tip1: 'Yon burchakdan (to\'rga perpendikulyar) suratga oling',
+   485→   485→    tip2: 'To\'liq yondashuv va sakrashni ko\'rsating — faqat zarbasini emas',
+   486→   486→    tip3: 'Yaxshi yoritgich, barqaror kamera',
+   487→   487→    tip4: 'Fonga qarshi farqli kiyim kiying',
+   488→   488→    errorTitle: 'Tahlil xatosi',
+   489→   489→    analyzeBtn: 'Zarbamni tahlil qilish',
+   490→   490→    analyzingBtn: 'Tahlil...',
+   491→   491→    resetBtn: 'Qayta boshlash',
+   492→   492→  },
+   493→   493→  uploader: {
+   494→   494→    dropHere: 'Hujum zarbasi videongizni shu yerga tashlang',
+   495→   495→    orBrowse: 'yoki tanlash uchun bosing',
+   496→   496→    formats: 'MP4, MOV, AVI, WebM — 50 MB gacha',
+   497→   497→    remove: 'O\'chirish',
+   498→   498→    readyToAnalyze: 'Tahlilga tayyor',
+   499→   499→    analyzing: 'Sun\'iy intellekt zarbangizni tahlil qilmoqda...',
+   500→   500→    analyzingSub: 'YOLOv8 har bir kadrda pozitsiyani kuzatish — 5-15 soniya atrofida',
+   501→   501→  },
+   502→   502→  analysis: {
+   503→   503→    emptyMsg: 'Natijalarni ko\'rish uchun avval video yuklang va tahlil qiling.',
+   504→   504→    yourSpikeAnalysis: 'Hujum zarbasi tahlili',
+   505→   505→    allCheckpoints: 'Barcha 15 ko\'rsatkich',
+   506→   506→    topStrengths: 'Kuchli tomonlar',
+   507→   507→    topWeaknesses: 'Zaif tomonlar',
+   508→   508→    generateBtn: '4 haftalik mashg\'ulat rejasi yaratish',
+   509→   509→    generatingBtn: 'Reja yaratilmoqda...',
+   510→   510→    newAnalysisBtn: 'Yangi tahlil',
+   511→   511→    phaseApproach: 'Yondashuv',
+   512→   512→    phaseJump: 'Sakrash va burilish',
+   513→   513→    phaseContact: 'Qo\'l urishi va kontakt',
+   514→   514→    phaseFollowThrough: 'Bajarish va qo\'nish',
+   515→   515→    phaseLabelApproach: 'Yondashuv',
+   516→   516→    phaseLabelJump: 'Sakrash',
+   517→   517→    phaseLabelContact: 'Kontakt',
+   518→   518→    phaseLabelFollowThrough: 'Bajarish',
+   519→   519→  },
+   520→   520→  training: {
+   521→   521→    title: 'Sizning 4 haftalik mashg\'ulat rejangiz',
+   522→   522→    emptyMsg: 'Avval tahlildan o\'ting, keyin mashg\'ulat rejasi yarating.',
+   523→   523→    readyMsg: 'Tahlingiz tayyor. Shaxsiy mashg\'ulat rejangizni yarating.',
+   524→   524→    generateBtn: '4 haftalik reja yaratish',
+   525→   525→    generatingBtn: 'Reja yaratilmoqda...',
+   526→   526→    week: 'Hafta',
+   527→   527→    watch: 'Ko\'rish',
+   528→   528→    hide: 'Yashirish',
+   529→   529→    noEquipment: 'Asbob-yoq?',
+   530→   530→    startOver: 'Qayta boshlash',
+   531→   531→  },
+   532→   532→  features: {
+   533→   533→    title: 'Hujum zarbangizni haqiqatan ham tuzatish uchun kerak bo\'lgan hamma narsa',
+   534→   534→    description: 'Hech qanday taxmin yo\'q. SI videongizni ko\'radi va aynan nima sodir bo\'layotganini aytadi — keyin haqiqiy zaif tomonlaringiz atrofida reja tuzadi.',
+   535→   535→    cards: [
+   536→   536→      {
+   537→   537→        title: 'Video-tahlil',
+   538→   538→        desc: 'Hujum zarbasi videongizni yuklang. SI haqiqiy harakat ma\'lumotlaridan 15 biomekanik ko\'rsatkichni tahlil qiladi — subyektiv o\'zini-o\'zi baholash emas.',
+   539→   539→      },
+   540→   540→      {
+   541→   541→        title: 'SI biomekanik audit',
+   542→   542→        desc: 'Sport biomekanikasida o\'qitilgan ko\'rish modeli yondashuv, sakrash, kontakt va qo\'nishni ekspert darajasida baholaydi.',
+   543→   543→      },
+   544→   544→      {
+   545→   545→        title: 'Kuchli va zaif tomonlar reytingi',
+   546→   546→        desc: 'Nima yaxshi qilayotganingizni va nima zarbangizni buzayotganini bilib oling — ustunlik tartibida. Buza olmaydigan narsani tuzatmang.',
+   547→   547→      },
+   548→   548→      {
+   549→   549→        title: 'Shaxsiy 4 haftalik reja',
+   550→   550→        desc: 'Eng zaif fazalaringiz atrofida tashkil etilgan yondashuvlar, takroriyliklar va murabbiylik ko\'rsatmalari bilan kunlik mashqlar.',
+   551→   551→      },
+   552→   552→      {
+   553→   553→        title: 'Fazalar bo\'yicha tahlil',
+   554→   554→        desc: 'Yondashuv, sakrash, kontakt va bajarish uchun alohida ballar. Avval qaysi fazaga hujum qilishni aniq biling.',
+   555→   555→      },
+   556→   556→      {
+   557→   557→        title: 'Xavfsizlik birinchi',
+   558→   558→        desc: 'Qo\'nish balansi va bajarish kuchga qarab qattiq baholanadi. Eng yaxshi zarba — travmasiz takrorlash mumkin bo\'lgan zarba.',
+   559→   559→      },
+   560→   560→    ],
+   561→   561→  },
+   562→   562→  science: {
+   563→   563→    title: 'Elita hujum zarbasining 4 fazasi',
+   564→   564→    description: 'Voleybolda kuch qo\'l kuchi haqida emas — kinetik zanjir haqida. Energiya yerdan oyoqlar, sonlar, tananing o\'rtasi, yelka, qo\'l va bilak orqali to\'pga oqadi.',
+   565→   565→    phases: [
+   566→   566→      {
+   567→   567→        title: '1. Yondashuv',
+   568→   568→        desc: '3 qadamli (yoki 4 qadamli) yondashuv, oxirgi ikki qadam eng uzun va tezkor. Oxirgi oldingi qadam gorizontal impulsni vertikal kuchga aylantiradi.',
+   569→   569→        items: ['Yondashuv tezligi', 'Oxirgi qadam uzunligi', 'Yondashuv burchagi', 'Qadam ritmi', 'Qo\'llarni orqaga urish'],
+   570→   570→      },
+   571→   571→      {
+   572→   572→        title: '2. Sakrash',
+   573→   573→        desc: 'Son-yelka ajralishi bilan maksimallashtiriladi. Sonlar yopiq holda qoladi, yelkalar buriladi, tananing o\'rtasida elastik energiya saqlanadi — zarba kuchi dvigateli.',
+   574→   574→        items: ['Vertikal konversiya', 'Son-yelka burilishi', 'Havoda tana holati'],
+   575→   575→      },
+   576→   576→      {
+   577→   577→        title: '3. Qo\'l urishi va kontakt',
+   578→   578→        desc: 'Zarba qo\'li \"o\'q va kamon\" holatiga yuklanadi, keyin ichki yelka burilishi bilan tez uriladi. Bilak chertish og\'ir, keskin to\'p uchun yuqori aylanish yaratadi.',
+   579→   579→        items: ['\"O\'q va kamon\" holati', 'Qo\'l urish tezligi', 'Kontakt nuqtasi', 'Bilak chertish', 'Kontakt balandligi'],
+   580→   580→      },
+   581→   581→      {
+   582→   582→        title: '4. Bajarish va qo\'nish',
+   583→   583→        desc: 'Qo\'l xavfsiz sekinlashish uchun tanadan o\'tishda davom etadi. Tizzalari egilgan ikki oyoqda yumshoq qo\'nish bo\'g\'imlarni himoya qiladi va mudofaa o\'tishiga imkon beradi.',
+   584→   584→        items: ['Bajarish', 'Qo\'nish balansi'],
+   585→   585→      },
+   586→   586→    ],
+   587→   587→  },
+   588→   588→  footer: {
+   589→   589→    subtitle: 'Voleybol hujum zarbasi tahlili va mashg\'ulat',
+   590→   590→    disclaimer: 'Shaxsiy murabbiylik o\'rnini bosmaydi. Doimo yaxshi isitib oling va doimiy og\'riq bo\'lsa sport fizioterapevtiga murojaat qiling.',
+   591→   591→  },
+   592→   592→  scoreLabels: {
+   593→   593→    elite: 'Elita',
+   594→   594→    excellent: "A'lo",
+   595→   595→    decent: 'Yaxshi',
+   596→   596→    needsWork: 'Yaxshilash kerak',
+   597→   597→    critical: 'Kritik',
+   598→   598→  },
+   599→   599→  positions: ['Outside Hitter', 'Opposite', 'Middle Blocker', 'Setter', 'Libero', 'Right Side'],
+   600→   600→  positionLabels: {
+   601→   601→    'Outside Hitter': 'O\'ng hujumchi',
+   602→   602→    'Opposite': 'Chap hujumchi',
+   603→   603→    'Middle Blocker': 'Markaziy bloker',
+   604→   604→    'Setter': 'Pleyymeyker',
+   605→   605→    'Libero': 'Libero',
+   606→   606→    'Right Side': 'O\'ng tomon hujumchi',
+   607→   607→  },
+   608→   608→  experienceLevels: ['Beginner (< 2 years)', 'Intermediate (2-5 years)', 'Advanced (5-10 years)', 'Elite (10+ years)'],
+   609→   609→  experienceLabels: {
+   610→   610→    'Beginner (< 2 years)': 'Boshlang\'ich (2 yilgacha)',
+   611→   611→    'Intermediate (2-5 years)': 'O\'rta (2-5 yil)',
+   612→   612→    'Advanced (5-10 years)': 'Ilg\'or (5-10 yil)',
+   613→   613→    'Elite (10+ years)': 'Elita (10+ yil)',
+   614→   614→  },
+   615→   615→  checkpoints: {
+   616→   616→    approach_speed: 'Yondashuv tezligi',
+   617→   617→    approach_angle: 'Yondashuv burchagi',
+   618→   618→    last_step_length: 'Oxirgi qadam uzunligi',
+   619→   619→    footwork_rhythm: 'Qadam ritmi',
+   620→   620→    arms_swing_back: 'Qo\'llarni orqaga urish',
+   621→   621→    vertical_jump_conversion: 'Vertikal konversiya',
+   622→   622→    hip_shoulder_rotation: 'Son-yelka burilishi',
+   623→   623→    body_position_air: 'Havoda tana holati',
+   624→   624→    bow_and_arrow: '"O\'q va kamon" holati',
+   625→   625→    arm_swing_speed: 'Qo\'l urish tezligi',
+   626→   626→    contact_point: 'Kontakt nuqtasi',
+   627→   627→    wrist_snap: 'Bilak chertish (yuqori aylanish)',
+   628→   628→    contact_height: 'Kontakt balandligi',
+   629→   629→    follow_through: 'Bajarish',
+   630→   630→    landing_balance: 'Qo\'nish balansi',
+   631→   631→  },
+   632→   632→  errors: {
+   633→   633→    analysisFailed: 'Tahlil xatosi',
+   634→   634→    unexpectedFormat: 'Tahlildan kutilmagan javob formati',
+   635→   635→    timeout: 'Tahlil vaqti tugadi. Qisqaroq video bilan urinib ko\'ring.',
+   636→   636→    somethingWentWrong: 'Nimadir noto\'g\'ri bo\'ldi',
+   637→   637→    planFailed: 'Reja yaratish xatosi',
+   638→   638→    planGenerateFailed: 'Reja yaratilmadi',
+   639→   639→  },
+   640→   640→}
+   641→   641→
+   642→   642→/* ──────────────────────────────────────────────────────────── */
+   643→   643→
+   644→   644→export const translations: Record<Lang, Translations> = { en, ru, uz }
