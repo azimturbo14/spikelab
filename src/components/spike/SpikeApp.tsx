@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
@@ -37,6 +37,9 @@ import {
 type TabState = 'upload' | 'analysis' | 'training'
 
 export default function SpikeApp() {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
   const [activeTab, setActiveTab] = useState<TabState>('upload')
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -146,6 +149,19 @@ export default function SpikeApp() {
   }
 
   const canAnalyze = videoFile !== null && !isAnalyzing
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center animate-pulse">
+            <Zap className="w-6 h-6 text-primary" />
+          </div>
+          <p className="text-sm text-muted-foreground">Loading SpikeLab...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
