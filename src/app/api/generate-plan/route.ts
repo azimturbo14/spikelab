@@ -26,38 +26,38 @@ export async function POST(request: NextRequest) {
 
 // ─── Algorithmic training plan generator (no AI API needed) ──
 
-const DRILL_LIBRARY: Record<string, { name: string; sets: number; reps: string; cue: string; duration: string }[]> = {
+const DRILL_LIBRARY: Record<string, { name: string; sets: number; reps: string; cue: string; duration: string; videoUrl: string }[]> = {
   'Approach': [
-    { name: '3-Step Approach Repetitions', sets: 3, reps: '8 reps', cue: 'Focus on the rhythm: long, long, short-quick', duration: '10 min' },
-    { name: 'Speed Ladder Footwork', sets: 3, reps: '30 seconds', cue: 'Stay on the balls of your feet, keep hips low', duration: '8 min' },
-    { name: 'Approach Angle Cone Drill', sets: 3, reps: '6 reps per side', cue: 'Approach at a 45-degree angle to the net', duration: '10 min' },
-    { name: 'Last Two Steps Power', sets: 4, reps: '6 reps', cue: 'Plant foot flat, drive the other knee up explosively', duration: '12 min' },
-    { name: 'Approach Without Ball', sets: 3, reps: '10 reps', cue: 'Full speed approach, focus on arm swing timing', duration: '10 min' },
-    { name: 'Mirror Approach Drill', sets: 3, reps: '1 minute', cue: "Match your partner's approach rhythm exactly", duration: '8 min' },
+    { name: '3-Step Approach Repetitions', sets: 3, reps: '8 reps', cue: 'Focus on the rhythm: long, long, short-quick', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=B7vbjJ2wQQQ' },
+    { name: 'Speed Ladder Footwork', sets: 3, reps: '30 seconds', cue: 'Stay on the balls of your feet, keep hips low', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=ve8sXE5Y8cY' },
+    { name: 'Approach Angle Cone Drill', sets: 3, reps: '6 reps per side', cue: 'Approach at a 45-degree angle to the net', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=B7vbjJ2wQQQ' },
+    { name: 'Last Two Steps Power', sets: 4, reps: '6 reps', cue: 'Plant foot flat, drive the other knee up explosively', duration: '12 min', videoUrl: 'https://www.youtube.com/watch?v=B7vbjJ2wQQQ' },
+    { name: 'Approach Without Ball', sets: 3, reps: '10 reps', cue: 'Full speed approach, focus on arm swing timing', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=fatTHeVW5jU' },
+    { name: 'Mirror Approach Drill', sets: 3, reps: '1 minute', cue: "Match your partner's approach rhythm exactly", duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=JSG4oRyKOBI' },
   ],
   'Jump & Rotation': [
-    { name: 'Countermovement Jumps', sets: 3, reps: '10 reps', cue: 'Quick dip and explode upward, keep chest upright', duration: '10 min' },
-    { name: 'Box Jumps', sets: 3, reps: '8 reps', cue: 'Soft landing, full extension at the top', duration: '10 min' },
-    { name: 'Hip-Shoulder Separation Drill', sets: 3, reps: '8 reps', cue: 'Hips stay closed while shoulders begin to rotate', duration: '8 min' },
-    { name: 'Depth Drops', sets: 3, reps: '6 reps', cue: 'Step off box, minimize ground contact, jump immediately', duration: '10 min' },
-    { name: 'Approach Jump to Target', sets: 4, reps: '6 reps', cue: 'Reach for a specific target at peak height', duration: '12 min' },
-    { name: 'Single Leg Bounds', sets: 3, reps: '6 reps per leg', cue: 'Maximize horizontal distance per bound', duration: '8 min' },
+    { name: 'Countermovement Jumps', sets: 3, reps: '10 reps', cue: 'Quick dip and explode upward, keep chest upright', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=x11nsx93zLM' },
+    { name: 'Box Jumps', sets: 3, reps: '8 reps', cue: 'Soft landing, full extension at the top', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=x11nsx93zLM' },
+    { name: 'Hip-Shoulder Separation Drill', sets: 3, reps: '8 reps', cue: 'Hips stay closed while shoulders begin to rotate', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=RIvrce6Z0kM' },
+    { name: 'Depth Drops', sets: 3, reps: '6 reps', cue: 'Step off box, minimize ground contact, jump immediately', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=rv3Sq3u-UhU' },
+    { name: 'Approach Jump to Target', sets: 4, reps: '6 reps', cue: 'Reach for a specific target at peak height', duration: '12 min', videoUrl: 'https://www.youtube.com/watch?v=x11nsx93zLM' },
+    { name: 'Single Leg Bounds', sets: 3, reps: '6 reps per leg', cue: 'Maximize horizontal distance per bound', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=2FSxBQTqZ3I' },
   ],
   'Arm Swing & Contact': [
-    { name: 'Bow-and-Arm Wall Drill', sets: 3, reps: '10 reps', cue: 'Load both arms back, then whip the hitting arm through', duration: '8 min' },
-    { name: 'Towel Snap Drill', sets: 3, reps: '12 reps', cue: 'Snap the towel at the highest point with full wrist flick', duration: '8 min' },
-    { name: 'Contact Point Target Practice', sets: 4, reps: '8 reps', cue: 'Hit the ball at full arm extension, in front of shoulder', duration: '12 min' },
-    { name: 'Arm Swing Against Wall', sets: 3, reps: '10 reps', cue: 'Full range of motion, fast whip at the top', duration: '8 min' },
-    { name: 'Wrist Snap Tennis Ball', sets: 3, reps: '10 reps per hand', cue: 'Snap wrist downward to create topspin on the ball', duration: '10 min' },
-    { name: 'Standing Spike Progression', sets: 3, reps: '8 reps', cue: 'Focus on high contact point and wrist snap', duration: '10 min' },
+    { name: 'Bow-and-Arm Wall Drill', sets: 3, reps: '10 reps', cue: 'Load both arms back, then whip the hitting arm through', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=u-WhjYYocBs' },
+    { name: 'Towel Snap Drill', sets: 3, reps: '12 reps', cue: 'Snap the towel at the highest point with full wrist flick', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=OBiDM2HsXvo' },
+    { name: 'Contact Point Target Practice', sets: 4, reps: '8 reps', cue: 'Hit the ball at full arm extension, in front of shoulder', duration: '12 min', videoUrl: 'https://www.youtube.com/watch?v=R__1B2Gbsx8' },
+    { name: 'Arm Swing Against Wall', sets: 3, reps: '10 reps', cue: 'Full range of motion, fast whip at the top', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=fatTHeVW5jU' },
+    { name: 'Wrist Snap Tennis Ball', sets: 3, reps: '10 reps per hand', cue: 'Snap wrist downward to create topspin on the ball', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=Q04EFKDYAHs' },
+    { name: 'Standing Spike Progression', sets: 3, reps: '8 reps', cue: 'Focus on high contact point and wrist snap', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=bWVWKnB04ho' },
   ],
   'Follow-Through & Landing': [
-    { name: 'Controlled Landings', sets: 3, reps: '10 reps', cue: 'Land softly on balls of feet, bend knees to absorb', duration: '10 min' },
-    { name: 'Stick Landing Hold', sets: 3, reps: '8 reps', cue: 'Freeze in athletic position for 2 seconds after landing', duration: '8 min' },
-    { name: 'Follow-Through Finish', sets: 3, reps: '10 reps', cue: 'Arm continues across body, hand finishes at opposite hip', duration: '8 min' },
-    { name: 'Box Jump to Stick Landing', sets: 3, reps: '6 reps', cue: 'Jump off box, stick the landing with perfect balance', duration: '10 min' },
-    { name: 'Single Leg Balance', sets: 3, reps: '30 seconds per leg', cue: 'Maintain stability after landing on one foot', duration: '8 min' },
-    { name: 'Spike and Transition', sets: 3, reps: '6 reps', cue: 'Complete spike follow-through, then immediately transition to defense', duration: '12 min' },
+    { name: 'Controlled Landings', sets: 3, reps: '10 reps', cue: 'Land softly on balls of feet, bend knees to absorb', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=5g6ijVFSoeI' },
+    { name: 'Stick Landing Hold', sets: 3, reps: '8 reps', cue: 'Freeze in athletic position for 2 seconds after landing', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=5g6ijVFSoeI' },
+    { name: 'Follow-Through Finish', sets: 3, reps: '10 reps', cue: 'Arm continues across body, hand finishes at opposite hip', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=u-WhjYYocBs' },
+    { name: 'Box Jump to Stick Landing', sets: 3, reps: '6 reps', cue: 'Jump off box, stick the landing with perfect balance', duration: '10 min', videoUrl: 'https://www.youtube.com/watch?v=5g6ijVFSoeI' },
+    { name: 'Single Leg Balance', sets: 3, reps: '30 seconds per leg', cue: 'Maintain stability after landing on one foot', duration: '8 min', videoUrl: 'https://www.youtube.com/watch?v=7WgzHOQGgYw' },
+    { name: 'Spike and Transition', sets: 3, reps: '6 reps', cue: 'Complete spike follow-through, then immediately transition to defense', duration: '12 min', videoUrl: 'https://www.youtube.com/watch?v=VQsaJXmCV0g' },
   ],
 }
 
@@ -74,6 +74,7 @@ function getDrills(phaseLabel: string, count: number, weekNum: number, dayOffset
     reps: d.reps,
     cue: d.cue,
     duration: d.duration,
+    videoUrl: d.videoUrl,
   }))
 }
 

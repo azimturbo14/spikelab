@@ -224,3 +224,29 @@ Stage Summary:
 - The entire SpikeLab app is now 100% standalone with ZERO external API dependencies
 - Only requires: Python3 + ultralytics + opencv + numpy (backend), Node.js + bun (frontend)
 - Can be installed on any device and will work offline
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Add video tutorial links to every training plan drill
+
+Work Log:
+- Searched YouTube for real volleyball drill tutorial videos across 4 categories (Approach, Jump, Arm Swing, Landing)
+- Found and curated 24 drill-specific YouTube video URLs from reputable volleyball training channels
+- Updated TrainingDrill type in spike-types.ts to include optional `videoUrl` field
+- Updated DRILL_LIBRARY in /api/generate-plan/route.ts with videoUrl for all 24 drills
+- Updated drillLibrary in /api/analyze/route.ts with matching videoUrl entries
+- Updated getDrills() in both routes to pass videoUrl through to the response
+- Rebuilt TrainingPlanView component with expandable YouTube embeds:
+  - Each drill shows a red "▶ Watch Tutorial" button with YouTube icon
+  - Clicking toggles an animated expand/collapse of an inline YouTube iframe
+  - Uses youtube-nocookie.com for privacy
+  - Smooth Framer Motion height animation
+- Verified API returns videoUrl fields correctly
+- No console errors, clean compilation
+
+Stage Summary:
+- Every one of the 24 unique drills now has a curated YouTube tutorial video
+- Videos are embedded inline with a click-to-expand UX (no page navigation)
+- Uses privacy-enhanced YouTube embeds (youtube-nocookie.com)
+- Zero external API dependencies maintained

@@ -64,6 +64,7 @@ export interface TrainingDrill {
   reps: string;
   cue: string;
   duration?: string;
+  videoUrl?: string;
 }
 
 export interface TrainingPlan {

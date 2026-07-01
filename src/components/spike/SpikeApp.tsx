@@ -5,7 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
   CheckCircle2, AlertTriangle, ArrowRight, Video, Brain,
-  Activity, Flame, Footprints, Dumbbell, RotateCcw
+  Activity, Flame, Footprints, Dumbbell, RotateCcw, Youtube,
+  ChevronDown
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -698,6 +699,17 @@ function TrainingPlanView({
   plan: TrainingPlan
   onReset: () => void
 }) {
+  const [openVideo, setOpenVideo] = useState<string | null>(null)
+
+  function getYouTubeId(url: string): string | null {
+    const match = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
+    return match ? match[1] : null
+  }
+
+  function toggleVideo(drillKey: string) {
+    setOpenVideo(prev => prev === drillKey ? null : drillKey)
+  }
+
   return (
     <div className="space-y-6">
       <Card className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
@@ -737,26 +749,64 @@ function TrainingPlanView({
                         <Badge variant="secondary" className="text-xs">{day.phase}</Badge>
                       </div>
                       <div className="space-y-2">
-                        {day.drills.map((drill, i) => (
-                          <div key={i} className="bg-muted/30 rounded-md p-2.5">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1">
-                                <p className="text-sm font-medium">{drill.name}</p>
-                                {drill.cue && (
-                                  <p className="text-xs text-muted-foreground mt-0.5 italic">
-                                    &quot;{drill.cue}&quot;
-                                  </p>
-                                )}
+                        {day.drills.map((drill, i) => {
+                          const videoId = drill.videoUrl ? getYouTubeId(drill.videoUrl) : null
+                          const drillKey = `${week.week}-${day.day}-${i}`
+                          const isOpen = openVideo === drillKey
+                          return (
+                            <div key={i} className="bg-muted/30 rounded-md p-2.5">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="text-sm font-medium">{drill.name}</p>
+                                    {videoId && (
+                                      <button
+                                        onClick={() => toggleVideo(drillKey)}
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-400 transition-colors shrink-0"
+                                      >
+                                        <Youtube className="w-3.5 h-3.5" />
+                                        {isOpen ? 'Hide' : 'Watch Tutorial'}
+                                        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                                      </button>
+                                    )}
+                                  </div>
+                                  {drill.cue && (
+                                    <p className="text-xs text-muted-foreground mt-0.5 italic">
+                                      &quot;{drill.cue}&quot;
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <p className="text-xs font-medium">{drill.sets} × {drill.reps}</p>
+                                  {drill.duration && (
+                                    <p className="text-xs text-muted-foreground">{drill.duration}</p>
+                                  )}
+                                </div>
                               </div>
-                              <div className="text-right shrink-0">
-                                <p className="text-xs font-medium">{drill.sets} × {drill.reps}</p>
-                                {drill.duration && (
-                                  <p className="text-xs text-muted-foreground">{drill.duration}</p>
+                              <AnimatePresence>
+                                {isOpen && videoId && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.25, ease: 'easeInOut' }}
+                                    className="overflow-hidden"
+                                  >
+                                    <div className="mt-3 rounded-lg overflow-hidden border bg-black">
+                                      <iframe
+                                        className="w-full aspect-video"
+                                        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
+                                        title={`${drill.name} Tutorial`}
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowFullScreen
+                                      />
+                                    </div>
+                                  </motion.div>
                                 )}
-                              </div>
+                              </AnimatePresence>
                             </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   ))}
