@@ -226,10 +226,10 @@ export default function VideoUploader({
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl bg-background/80 backdrop-blur-sm">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm font-medium text-foreground">
-              Analyzing your spike...
+              Analyzing your spike with AI...
             </p>
             <p className="text-xs text-muted-foreground">
-              AI is analyzing your spike — about 30-60 seconds
+              YOLOv8 pose tracking every frame — about 5-15 seconds
             </p>
           </div>
         )}

@@ -566,7 +566,12 @@ function AnalysisView({
               </div>
             </div>
             <div className="text-center sm:text-left flex-1">
-              <Badge variant="secondary" className="mb-2">{analysis.estimatedLevel}</Badge>
+              <div className="flex items-center gap-2 mb-2">
+                <Badge variant="secondary">{analysis.estimatedLevel}</Badge>
+                <Badge variant="outline" className="text-xs font-normal">
+                  YOLOv8 Pose Tracking
+                </Badge>
+              </div>
               <h2 className="text-xl sm:text-2xl font-bold mb-1">
                 {playerName ? `${playerName}'s` : 'Your'} Spike Analysis
               </h2>
