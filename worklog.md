@@ -269,3 +269,21 @@ Stage Summary:
 - Every drill that needs equipment now shows: what's needed + exactly how to substitute with household items
 - Examples: Speed ladder → tape/chalk on floor; Plyo box → stairs/park bench; Tennis ball → rolled socks; Cones → water bottles
 - Deployment cross-origin warning resolved with explicit domain patterns
+
+---
+Task ID: 4
+Agent: Main Agent
+Task: Fix React hydration mismatch error (Radix UI auto-generated IDs differ between SSR and client)
+
+Work Log:
+- Identified root cause: `next/dynamic` with `ssr: false` cannot be used in Server Components in Next.js 16
+- Created `/home/z/my-project/src/components/spike/SpikeAppLoader.tsx` — a 'use client' wrapper component
+- The wrapper uses `dynamic(() => import('@/components/spike/SpikeApp'), { ssr: false })` with a loading spinner
+- Updated `/home/z/my-project/src/app/page.tsx` to import SpikeAppLoader instead of SpikeApp directly
+- Verified via Agent Browser: page loads with 200 status, zero console errors, zero hydration warnings
+- Full UI renders correctly: hero, tabs, upload form, features, science section, footer
+
+Stage Summary:
+- Hydration mismatch completely eliminated by delegating ssr:false to a client component wrapper
+- SpikeAppLoader provides a clean loading spinner while the client bundle loads
+- No functional changes to the SpikeApp itself

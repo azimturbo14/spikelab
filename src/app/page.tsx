@@ -1,7 +1,7 @@
-import SpikeApp from '@/components/spike/SpikeApp'
+import SpikeAppLoader from '@/components/spike/SpikeAppLoader'
 
 export const dynamic = 'force-dynamic'
 
 export default function Page() {
-  return <SpikeApp />
+  return <SpikeAppLoader />
 }
