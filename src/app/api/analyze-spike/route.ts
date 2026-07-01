@@ -300,7 +300,7 @@ export async function POST(request: NextRequest) {
     console.log(`[SpikeLab] Analyzing video: ${videoFile.name} (${(videoFile.size / 1024 / 1024).toFixed(1)}MB)`)
 
     // Extract key frames from video (server-side)
-    const frameCount = 6
+    const frameCount = 4
     const framePaths = await extractFrames(videoPath, tempDir, frameCount)
     console.log(`[SpikeLab] Extracted ${framePaths.length} frames from video`)
 

@@ -62,8 +62,10 @@ export default function SpikeApp() {
     setAnalysis(null)
     setTrainingPlan(null)
 
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 180_000) // 3 min timeout
+
     try {
-      // Send video file directly as FormData (no frame extraction needed)
       const formData = new FormData()
       formData.append('video', videoFile)
       formData.append('name', profile.name)
@@ -73,6 +75,7 @@ export default function SpikeApp() {
       const res = await fetch('/api/analyze-spike', {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       })
 
       if (!res.ok) {
@@ -85,11 +88,24 @@ export default function SpikeApp() {
       }
 
       const data = await res.json()
-      setAnalysis(data.analysis)
-      setActiveTab('analysis')
+      if (data.analysis) {
+        setAnalysis(data.analysis)
+        setActiveTab('analysis')
+      } else if (data.scores) {
+        // API returned analysis directly without wrapper
+        setAnalysis(data as unknown as import('@/lib/spike-types').SpikeAnalysis)
+        setActiveTab('analysis')
+      } else {
+        throw new Error('Unexpected response format from analysis')
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Analysis timed out. Please try with a shorter video.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Something went wrong')
+      }
     } finally {
+      clearTimeout(timeoutId)
       setIsAnalyzing(false)
     }
   }

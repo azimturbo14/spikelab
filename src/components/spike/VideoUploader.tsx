@@ -229,7 +229,7 @@ export default function VideoUploader({
               Analyzing your spike...
             </p>
             <p className="text-xs text-muted-foreground">
-              AI is watching your video — about 30 seconds
+              AI is analyzing your spike — about 30-60 seconds
             </p>
           </div>
         )}
