@@ -1658,6 +1658,23 @@ def analyze_video(video_path: str) -> Dict[str, Any]:
     return result
 
 
+def convert_to_native(obj):
+    """Recursively convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: convert_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_native(v) for v in obj]
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return convert_to_native(obj.tolist())
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    return obj
+
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Usage: python3 spike_pose_analysis.py <video_path> [output_json_path]"}))
@@ -1672,6 +1689,7 @@ def main():
 
     try:
         result = analyze_video(video_path)
+        result = convert_to_native(result)
         output_json = json.dumps(result, indent=2)
 
         # Print to stdout

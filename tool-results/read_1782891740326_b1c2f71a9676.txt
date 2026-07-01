@@ -1,0 +1,777 @@
+     1→'use client'
+     2→
+     3→import { useState, useCallback } from 'react'
+     4→import { motion, AnimatePresence } from 'framer-motion'
+     5→import {
+     6→  Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
+     7→  CheckCircle2, AlertTriangle, ArrowRight, Video, Brain,
+     8→  Activity, Flame, Footprints, Dumbbell, RotateCcw
+     9→} from 'lucide-react'
+    10→import { Button } from '@/components/ui/button'
+    11→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    12→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    13→import { Badge } from '@/components/ui/badge'
+    14→import { Progress } from '@/components/ui/progress'
+    15→import {
+    16→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    17→} from '@/components/ui/select'
+    18→import { Input } from '@/components/ui/input'
+    19→import { Label } from '@/components/ui/label'
+    20→import { Separator } from '@/components/ui/separator'
+    21→import { Skeleton } from '@/components/ui/skeleton'
+    22→import VideoUploader from './VideoUploader'
+    23→import {
+    24→  type SpikeAnalysis,
+    25→  type TrainingPlan,
+    26→  type PlayerProfile,
+    27→  type CheckpointScores,
+    28→  CHECKPOINT_LABELS,
+    29→  POSITIONS,
+    30→  EXPERIENCE_LEVELS,
+    31→  getScoreColor,
+    32→  getScoreBgColor,
+    33→  getScoreLabel,
+    34→} from '@/lib/spike-types'
+    35→
+    36→type TabState = 'upload' | 'analysis' | 'training'
+    37→
+    38→export default function SpikeApp() {
+    39→  const [activeTab, setActiveTab] = useState<TabState>('upload')
+    40→  const [videoFile, setVideoFile] = useState<File | null>(null)
+    41→  const [isAnalyzing, setIsAnalyzing] = useState(false)
+    42→  const [analysis, setAnalysis] = useState<SpikeAnalysis | null>(null)
+    43→  const [trainingPlan, setTrainingPlan] = useState<TrainingPlan | null>(null)
+    44→  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false)
+    45→  const [error, setError] = useState<string | null>(null)
+    46→
+    47→  const [profile, setProfile] = useState<PlayerProfile>({
+    48→    name: '',
+    49→    position: 'Outside Hitter',
+    50→    experience: 'Intermediate (2-5 years)',
+    51→  })
+    52→
+    53→  const handleVideoReady = useCallback((file: File) => {
+    54→    setVideoFile(file)
+    55→    setError(null)
+    56→  }, [])
+    57→
+    58→  const handleAnalyze = async () => {
+    59→    if (!videoFile) return
+    60→    setIsAnalyzing(true)
+    61→    setError(null)
+    62→    setAnalysis(null)
+    63→    setTrainingPlan(null)
+    64→
+    65→    const controller = new AbortController()
+    66→    const timeoutId = setTimeout(() => controller.abort(), 180_000) // 3 min timeout
+    67→
+    68→    try {
+    69→      const formData = new FormData()
+    70→      formData.append('video', videoFile)
+    71→      formData.append('name', profile.name)
+    72→      formData.append('position', profile.position)
+    73→      formData.append('experience', profile.experience)
+    74→
+    75→      const res = await fetch('/api/analyze-spike', {
+    76→        method: 'POST',
+    77→        body: formData,
+    78→        signal: controller.signal,
+    79→      })
+    80→
+    81→      if (!res.ok) {
+    82→        let errMsg = 'Analysis failed'
+    83→        try {
+    84→          const errData = await res.json()
+    85→          errMsg = errData.error || errMsg
+    86→        } catch { /* response wasn't JSON */ }
+    87→        throw new Error(errMsg)
+    88→      }
+    89→
+    90→      const data = await res.json()
+    91→      if (data.analysis) {
+    92→        setAnalysis(data.analysis)
+    93→        setActiveTab('analysis')
+    94→      } else if (data.scores) {
+    95→        // API returned analysis directly without wrapper
+    96→        setAnalysis(data as unknown as import('@/lib/spike-types').SpikeAnalysis)
+    97→        setActiveTab('analysis')
+    98→      } else {
+    99→        throw new Error('Unexpected response format from analysis')
+   100→      }
+   101→    } catch (err: unknown) {
+   102→      if (err instanceof DOMException && err.name === 'AbortError') {
+   103→        setError('Analysis timed out. Please try with a shorter video.')
+   104→      } else {
+   105→        setError(err instanceof Error ? err.message : 'Something went wrong')
+   106→      }
+   107→    } finally {
+   108→      clearTimeout(timeoutId)
+   109→      setIsAnalyzing(false)
+   110→    }
+   111→  }
+   112→
+   113→  const handleGeneratePlan = async () => {
+   114→    if (!analysis) return
+   115→    setIsGeneratingPlan(true)
+   116→
+   117→    try {
+   118→      const res = await fetch('/api/generate-plan', {
+   119→        method: 'POST',
+   120→        headers: { 'Content-Type': 'application/json' },
+   121→        body: JSON.stringify({ analysis, profile }),
+   122→      })
+   123→
+   124→      if (!res.ok) {
+   125→        const errData = await res.json()
+   126→        throw new Error(errData.error || 'Plan generation failed')
+   127→      }
+   128→
+   129→      const data = await res.json()
+   130→      setTrainingPlan(data.plan)
+   131→      setActiveTab('training')
+   132→    } catch (err: unknown) {
+   133→      setError(err instanceof Error ? err.message : 'Failed to generate plan')
+   134→    } finally {
+   135→      setIsGeneratingPlan(false)
+   136→    }
+   137→  }
+   138→
+   139→  const handleReset = () => {
+   140→    setVideoFile(null)
+   141→    setAnalysis(null)
+   142→    setTrainingPlan(null)
+   143→    setError(null)
+   144→    setActiveTab('upload')
+   145→  }
+   146→
+   147→  const canAnalyze = videoFile !== null && !isAnalyzing
+   148→
+   149→  return (
+   150→    <div className="min-h-screen flex flex-col bg-background">
+   151→      {/* Header */}
+   152→      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
+   153→        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+   154→          <div className="flex items-center gap-3">
+   155→            <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
+   156→              <Zap className="w-5 h-5 text-primary-foreground" />
+   157→            </div>
+   158→            <div>
+   159→              <span className="font-bold text-lg tracking-tight">SpikeLab</span>
+   160→              <span className="hidden sm:inline text-xs text-muted-foreground ml-2 uppercase tracking-widest">Volleyball Spike Analysis</span>
+   161→            </div>
+   162→          </div>
+   163→          <nav className="hidden md:flex items-center gap-1">
+   164→            <Button variant="ghost" size="sm" onClick={() => {
+   165→              const el = document.getElementById('upload-section')
+   166→              el?.scrollIntoView({ behavior: 'smooth' })
+   167→            }}>Analyze</Button>
+   168→            <Button variant="ghost" size="sm" onClick={() => {
+   169→              const el = document.getElementById('features-section')
+   170→              el?.scrollIntoView({ behavior: 'smooth' })
+   171→            }}>Features</Button>
+   172→            <Button variant="ghost" size="sm" onClick={() => {
+   173→              const el = document.getElementById('science-section')
+   174→              el?.scrollIntoView({ behavior: 'smooth' })
+   175→            }}>The Science</Button>
+   176→          </nav>
+   177→        </div>
+   178→      </header>
+   179→
+   180→      <main className="flex-1">
+   181→        {/* Hero */}
+   182→        <section className="relative overflow-hidden">
+   183→          <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 via-transparent to-amber-500/5" />
+   184→          <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-24 text-center">
+   185→            <Badge variant="secondary" className="mb-4 gap-1.5">
+   186→              <Video className="w-3.5 h-3.5" /> Video-Powered Analysis
+   187→            </Badge>
+   188→            <motion.h1
+   189→              initial={{ opacity: 0, y: 20 }}
+   190→              animate={{ opacity: 1, y: 0 }}
+   191→              className="text-3xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6"
+   192→            >
+   193→              Upload your spike.{' '}
+   194→              <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-amber-500">
+   195→                Get the truth.
+   196→              </span>
+   197→            </motion.h1>
+   198→            <motion.p
+   199→              initial={{ opacity: 0, y: 20 }}
+   200→              animate={{ opacity: 1, y: 0 }}
+   201→              transition={{ delay: 0.1 }}
+   202→              className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-8"
+   203→            >
+   204→              AI watches your spike video and rates 15 biomechanical checkpoints. No guessing, no
+   205→              subjective sliders. Just real data from your real movement.
+   206→            </motion.p>
+   207→            <motion.div
+   208→              initial={{ opacity: 0, y: 20 }}
+   209→              animate={{ opacity: 1, y: 0 }}
+   210→              transition={{ delay: 0.2 }}
+   211→              className="flex flex-wrap justify-center gap-3 text-sm text-muted-foreground"
+   212→            >
+   213→              <span className="flex items-center gap-1.5">
+   214→                <Brain className="w-4 h-4 text-orange-500" /> AI biomechanical audit
+   215→              </span>
+   216→              <span className="flex items-center gap-1.5">
+   217→                <Target className="w-4 h-4 text-orange-500" /> Strengths &amp; weaknesses ranked
+   218→              </span>
+   219→              <span className="flex items-center gap-1.5">
+   220→                <TrendingUp className="w-4 h-4 text-orange-500" /> Personalized 4-week plan
+   221→              </span>
+   222→            </motion.div>
+   223→          </div>
+   224→        </section>
+   225→
+   226→        {/* Main Tool */}
+   227→        <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 pb-20">
+   228→          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabState)}>
+   229→            <TabsList className="grid w-full grid-cols-3 mb-8">
+   230→              <TabsTrigger value="upload" className="gap-1.5">
+   231→                <Video className="w-4 h-4" /> 1. Upload Video
+   232→              </TabsTrigger>
+   233→              <TabsTrigger value="analysis" disabled={!analysis} className="gap-1.5">
+   234→                <Activity className="w-4 h-4" /> 2. Analysis
+   235→              </TabsTrigger>
+   236→              <TabsTrigger value="training" disabled={!trainingPlan} className="gap-1.5">
+   237→                <Dumbbell className="w-4 h-4" /> 3. Training Plan
+   238→              </TabsTrigger>
+   239→            </TabsList>
+   240→
+   241→            {/* Tab 1: Upload */}
+   242→            <TabsContent value="upload">
+   243→              <Card>
+   244→                <CardContent className="p-4 sm:p-6 space-y-6">
+   245→                  {/* Player Profile - Minimal */}
+   246→                  <div>
+   247→                    <h3 className="font-semibold mb-1">Player Profile</h3>
+   248→                    <p className="text-sm text-muted-foreground mb-4">
+   249→                      Optional. Helps calibrate your results against position-level benchmarks.
+   250→                    </p>
+   251→                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   252→                      <div className="space-y-2">
+   253→                        <Label htmlFor="player-name">Name / Nickname</Label>
+   254→                        <Input
+   255→                          id="player-name"
+   256→                          placeholder="Your name"
+   257→                          value={profile.name}
+   258→                          onChange={(e) => setProfile(p => ({ ...p, name: e.target.value }))}
+   259→                        />
+   260→                      </div>
+   261→                      <div className="space-y-2">
+   262→                        <Label>Position</Label>
+   263→                        <Select value={profile.position} onValueChange={(v) => setProfile(p => ({ ...p, position: v }))}>
+   264→                          <SelectTrigger><SelectValue /></SelectTrigger>
+   265→                          <SelectContent>
+   266→                            {POSITIONS.map(pos => (
+   267→                              <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+   268→                            ))}
+   269→                          </SelectContent>
+   270→                        </Select>
+   271→                      </div>
+   272→                      <div className="space-y-2">
+   273→                        <Label>Experience</Label>
+   274→                        <Select value={profile.experience} onValueChange={(v) => setProfile(p => ({ ...p, experience: v }))}>
+   275→                          <SelectTrigger><SelectValue /></SelectTrigger>
+   276→                          <SelectContent>
+   277→                            {EXPERIENCE_LEVELS.map(lvl => (
+   278→                              <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+   279→                            ))}
+   280→                          </SelectContent>
+   281→                        </Select>
+   282→                      </div>
+   283→                    </div>
+   284→                  </div>
+   285→
+   286→                  <Separator />
+   287→
+   288→                  {/* Video Upload */}
+   289→                  <div>
+   290→                    <h3 className="font-semibold mb-1">Upload Your Spike Video</h3>
+   291→                    <p className="text-sm text-muted-foreground mb-4">
+   292→                      Record yourself performing a full spike approach and hit. Side angle works best.
+   293→                    </p>
+   294→                    <VideoUploader
+   295→                      onVideoReady={handleVideoReady}
+   296→                      isAnalyzing={isAnalyzing}
+   297→                      disabled={isAnalyzing}
+   298→                    />
+   299→                  </div>
+   300→
+   301→                  {/* Video Tips */}
+   302→                  <div className="bg-muted/50 rounded-xl p-4 space-y-2">
+   303→                    <h4 className="font-medium text-sm flex items-center gap-2">
+   304→                      <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Tips for best results
+   305→                    </h4>
+   306→                    <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+   307→                      <li>Record from the <strong>side angle</strong> (perpendicular to the net)</li>
+   308→                      <li>Show the <strong>full approach and jump</strong> — not just the hit</li>
+   309→                      <li>Good lighting, steady camera</li>
+   310→                      <li>Wear contrasting clothing against the background</li>
+   311→                    </ul>
+   312→                  </div>
+   313→
+   314→                  {/* Error */}
+   315→                  {error && (
+   316→                    <div className="bg-destructive/10 text-destructive rounded-lg p-4 text-sm flex items-start gap-2">
+   317→                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+   318→                      <div>
+   319→                        <p className="font-medium">Analysis failed</p>
+   320→                        <p className="text-destructive/80">{error}</p>
+   321→                      </div>
+   322→                    </div>
+   323→                  )}
+   324→
+   325→                  {/* Action Buttons */}
+   326→                  <div className="flex flex-col sm:flex-row gap-3 pt-2">
+   327→                    <Button
+   328→                      size="lg"
+   329→                      className="flex-1 gap-2"
+   330→                      disabled={!canAnalyze}
+   331→                      onClick={handleAnalyze}
+   332→                    >
+   333→                      {isAnalyzing ? (
+   334→                        <>
+   335→                          <motion.div
+   336→                            animate={{ rotate: 360 }}
+   337→                            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+   338→                          >
+   339→                            <RotateCcw className="w-4 h-4" />
+   340→                          </motion.div>
+   341→                          Analyzing...
+   342→                        </>
+   343→                      ) : (
+   344→                        <>
+   345→                          <Brain className="w-4 h-4" /> Analyze My Spike
+   346→                        </>
+   347→                      )}
+   348→                    </Button>
+   349→                    {videoFile && !isAnalyzing && (
+   350→                      <Button variant="outline" size="lg" onClick={handleReset}>
+   351→                        Reset
+   352→                      </Button>
+   353→                    )}
+   354→                  </div>
+   355→                </CardContent>
+   356→              </Card>
+   357→            </TabsContent>
+   358→
+   359→            {/* Tab 2: Analysis */}
+   360→            <TabsContent value="analysis">
+   361→              {analysis ? (
+   362→                <AnalysisView
+   363→                  analysis={analysis}
+   364→                  playerName={profile.name}
+   365→                  onGeneratePlan={handleGeneratePlan}
+   366→                  isGenerating={isGeneratingPlan}
+   367→                  onReset={handleReset}
+   368→                />
+   369→              ) : (
+   370→                <Card className="p-8 text-center text-muted-foreground">
+   371→                  <Activity className="w-10 h-10 mx-auto mb-3 opacity-50" />
+   372→                  <p>Upload and analyze a video first to see your results.</p>
+   373→                </Card>
+   374→              )}
+   375→            </TabsContent>
+   376→
+   377→            {/* Tab 3: Training Plan */}
+   378→            <TabsContent value="training">
+   379→              {trainingPlan ? (
+   380→                <TrainingPlanView plan={trainingPlan} onReset={handleReset} />
+   381→              ) : analysis ? (
+   382→                <Card className="p-8 text-center">
+   383→                  <Dumbbell className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-50" />
+   384→                  <p className="text-muted-foreground mb-4">Your analysis is ready. Generate your personalized training plan.</p>
+   385→                  <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2">
+   386→                    {isGeneratingPlan ? (
+   387→                      <>
+   388→                        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+   389→                          <RotateCcw className="w-4 h-4" />
+   390→                        </motion.div>
+   391→                        Generating plan...
+   392→                      </>
+   393→                    ) : (
+   394→                      <>Generate 4-Week Plan <ChevronRight className="w-4 h-4" /></>
+   395→                    )}
+   396→                  </Button>
+   397→                </Card>
+   398→              ) : (
+   399→                <Card className="p-8 text-center text-muted-foreground">
+   400→                  <Dumbbell className="w-10 h-10 mx-auto mb-3 opacity-50" />
+   401→                  <p>Complete the analysis first, then generate your training plan.</p>
+   402→                </Card>
+   403→              )}
+   404→            </TabsContent>
+   405→          </Tabs>
+   406→        </section>
+   407→
+   408→        {/* Features */}
+   409→        <section id="features-section" className="bg-muted/30 py-16 sm:py-20">
+   410→          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+   411→            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
+   412→              Everything you need to actually fix your spike
+   413→            </h2>
+   414→            <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
+   415→              No more guessing. The AI watches your video and tells you exactly what&apos;s happening — then
+   416→              builds a plan around your real weaknesses.
+   417→            </p>
+   418→            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+   419→              {[
+   420→                { icon: Video, title: 'Video-Powered Analysis', desc: 'Upload a video of your spike. The AI analyzes 15 biomechanical checkpoints from actual movement data — not subjective self-assessment.' },
+   421→                { icon: Brain, title: 'AI Biomechanical Audit', desc: 'A vision model trained on sports biomechanics rates your approach, jump, contact, and landing with expert-level accuracy.' },
+   422→                { icon: Target, title: 'Strengths & Weaknesses Ranked', desc: 'See what you\'re already doing well and what\'s killing your spike — in priority order. Stop fixing what isn\'t broken.' },
+   423→                { icon: TrendingUp, title: 'Personalized 4-Week Plan', desc: 'Daily drills with sets, reps, and coaching cues organized around your weakest phases. Built for actual athletes.' },
+   424→                { icon: Activity, title: 'Phase-by-Phase Breakdown', desc: 'Separate scores for Approach, Jump, Contact, and Follow-Through. Know exactly which phase to attack first.' },
+   425→                { icon: ShieldCheck, title: 'Injury-First Mindset', desc: 'Landing balance and follow-through are scored as hard as power. The best spike is one you can repeat injury-free.' },
+   426→              ].map((f) => (
+   427→                <Card key={f.title} className="p-6">
+   428→                  <f.icon className="w-8 h-8 text-orange-500 mb-3" />
+   429→                  <h3 className="font-semibold mb-2">{f.title}</h3>
+   430→                  <p className="text-sm text-muted-foreground">{f.desc}</p>
+   431→                </Card>
+   432→              ))}
+   433→            </div>
+   434→          </div>
+   435→        </section>
+   436→
+   437→        {/* Science */}
+   438→        <section id="science-section" className="py-16 sm:py-20">
+   439→          <div className="max-w-4xl mx-auto px-4 sm:px-6">
+   440→            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
+   441→              The 4 phases of an elite spike
+   442→            </h2>
+   443→            <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
+   444→              Power in volleyball is not about arm strength — it&apos;s about the kinetic chain. Energy flows from the ground through the legs, hips, torso, shoulder, arm, and wrist into the ball.
+   445→            </p>
+   446→            <div className="space-y-8">
+   447→              {[
+   448→                {
+   449→                  phase: '1. The Approach',
+   450→                  icon: Footprints,
+   451→                  color: 'from-blue-500/10 to-cyan-500/10',
+   452→                  border: 'border-blue-500/20',
+   453→                  desc: 'A 3-step (or 4-step) approach where the last two steps are the longest and fastest. The second-to-last step converts horizontal momentum into vertical force.',
+   454→                  items: ['Approach speed', 'Last step length', 'Approach angle', 'Footwork rhythm', 'Arm swing back'],
+   455→                },
+   456→                {
+   457→                  phase: '2. The Jump',
+   458→                  icon: Activity,
+   459→                  color: 'from-violet-500/10 to-purple-500/10',
+   460→                  border: 'border-violet-500/20',
+   461→                  desc: 'Maximized by hip-shoulder separation. The hips stay closed while the shoulders rotate, storing elastic energy in the core — the engine of spiking power.',
+   462→                  items: ['Vertical jump conversion', 'Hip-shoulder rotation', 'Air body position'],
+   463→                },
+   464→                {
+   465→                  phase: '3. Arm Swing & Contact',
+   466→                  icon: Flame,
+   467→                  color: 'from-orange-500/10 to-amber-500/10',
+   468→                  border: 'border-orange-500/20',
+   469→                  desc: 'The hitting arm loads into a bow-and-arrow position, then whips through with internal shoulder rotation. Wrist snap generates topspin for a heavy, sharp ball.',
+   470→                  items: ['Bow-and-arrow position', 'Arm swing speed', 'Contact point', 'Wrist snap', 'Contact height'],
+   471→                },
+   472→                {
+   473→                  phase: '4. Follow-Through & Landing',
+   474→                  icon: ShieldCheck,
+   475→                  color: 'from-emerald-500/10 to-green-500/10',
+   476→                  border: 'border-emerald-500/20',
+   477→                  desc: 'The arm continues across the body to decelerate safely. A soft two-foot landing with knees bent protects joints and enables instant defensive transition.',
+   478→                  items: ['Follow-through', 'Landing balance'],
+   479→                },
+   480→              ].map((p) => (
+   481→                <Card key={p.phase} className={`p-6 bg-gradient-to-r ${p.color} border ${p.border}`}>
+   482→                  <div className="flex items-start gap-4">
+   483→                    <div className="w-10 h-10 rounded-lg bg-background/80 flex items-center justify-center shrink-0 mt-0.5">
+   484→                      <p.icon className="w-5 h-5" />
+   485→                    </div>
+   486→                    <div>
+   487→                      <h3 className="font-semibold text-lg mb-1">{p.phase}</h3>
+   488→                      <p className="text-sm text-muted-foreground mb-3">{p.desc}</p>
+   489→                      <div className="flex flex-wrap gap-2">
+   490→                        {p.items.map(item => (
+   491→                          <Badge key={item} variant="secondary" className="text-xs">{item}</Badge>
+   492→                        ))}
+   493→                      </div>
+   494→                    </div>
+   495→                  </div>
+   496→                </Card>
+   497→              ))}
+   498→            </div>
+   499→          </div>
+   500→        </section>
+   501→      </main>
+   502→
+   503→      {/* Footer */}
+   504→      <footer className="border-t py-8 mt-auto">
+   505→        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
+   506→          <div className="flex items-center gap-2">
+   507→            <Zap className="w-4 h-4" />
+   508→            <span className="font-medium text-foreground">SpikeLab</span>
+   509→            <span>Volleyball Spike Analysis & Training</span>
+   510→          </div>
+   511→          <p className="text-xs text-center sm:text-right max-w-md">
+   512→            Not a substitute for in-person coaching. Always warm up properly and consult a sports
+   513→            physiotherapist if you experience persistent pain.
+   514→          </p>
+   515→        </div>
+   516→      </footer>
+   517→    </div>
+   518→  )
+   519→}
+   520→
+   521→/* ─── Analysis View ──────────────────────────────────────────── */
+   522→
+   523→function AnalysisView({
+   524→  analysis,
+   525→  playerName,
+   526→  onGeneratePlan,
+   527→  isGenerating,
+   528→  onReset,
+   529→}: {
+   530→  analysis: SpikeAnalysis
+   531→  playerName: string
+   532→  onGeneratePlan: () => void
+   533→  isGenerating: boolean
+   534→  onReset: () => void
+   535→}) {
+   536→  const overallAvg = Math.round(
+   537→    Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 15
+   538→  )
+   539→
+   540→  const phases = [
+   541→    { key: 'approach' as const, label: 'Approach', icon: Footprints, color: 'text-blue-500' },
+   542→    { key: 'jump' as const, label: 'Jump & Rotation', icon: Activity, color: 'text-violet-500' },
+   543→    { key: 'contact' as const, label: 'Arm Swing & Contact', icon: Flame, color: 'text-orange-500' },
+   544→    { key: 'followThrough' as const, label: 'Follow-Through & Landing', icon: ShieldCheck, color: 'text-emerald-500' },
+   545→  ]
+   546→
+   547→  return (
+   548→    <div className="space-y-6">
+   549→      {/* Overall Score */}
+   550→      <Card className="overflow-hidden">
+   551→        <div className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
+   552→          <div className="flex flex-col sm:flex-row items-center gap-6">
+   553→            <div className="relative w-28 h-28 sm:w-32 sm:h-32">
+   554→              <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+   555→                <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" className="text-muted/30" strokeWidth="8" />
+   556→                <circle
+   557→                  cx="60" cy="60" r="52" fill="none"
+   558→                  stroke="currentColor" strokeWidth="8" strokeLinecap="round"
+   559→                  strokeDasharray={`${(overallAvg / 100) * 327} 327`}
+   560→                  className={getScoreColor(overallAvg)}
+   561→                />
+   562→              </svg>
+   563→              <div className="absolute inset-0 flex flex-col items-center justify-center">
+   564→                <span className="text-3xl font-bold">{overallAvg}</span>
+   565→                <span className="text-xs text-muted-foreground">/ 100</span>
+   566→              </div>
+   567→            </div>
+   568→            <div className="text-center sm:text-left flex-1">
+   569→              <div className="flex items-center gap-2 mb-2">
+   570→                <Badge variant="secondary">{analysis.estimatedLevel}</Badge>
+   571→                <Badge variant="outline" className="text-xs font-normal">
+   572→                  YOLOv8 Pose Tracking
+   573→                </Badge>
+   574→              </div>
+   575→              <h2 className="text-xl sm:text-2xl font-bold mb-1">
+   576→                {playerName ? `${playerName}'s` : 'Your'} Spike Analysis
+   577→              </h2>
+   578→              <p className="text-muted-foreground text-sm leading-relaxed">
+   579→                {analysis.coachNotes}
+   580→              </p>
+   581→            </div>
+   582→          </div>
+   583→        </div>
+   584→      </Card>
+   585→
+   586→      {/* Phase Scores */}
+   587→      <div className="grid sm:grid-cols-2 gap-4">
+   588→        {phases.map(({ key, label, icon: Icon, color }) => {
+   589→          const phase = analysis.phaseAnalysis[key]
+   590→          return (
+   591→            <Card key={key} className="p-5">
+   592→              <div className="flex items-center justify-between mb-3">
+   593→                <div className="flex items-center gap-2">
+   594→                  <Icon className={`w-5 h-5 ${color}`} />
+   595→                  <h3 className="font-semibold">{label}</h3>
+   596→                </div>
+   597→                <span className={`text-2xl font-bold ${getScoreColor(phase.score)}`}>{phase.score}</span>
+   598→              </div>
+   599→              <Progress value={phase.score} className="h-2 mb-3" />
+   600→              <p className="text-sm text-muted-foreground">{phase.feedback}</p>
+   601→            </Card>
+   602→          )
+   603→        })}
+   604→      </div>
+   605→
+   606→      {/* Detailed Checkpoint Scores */}
+   607→      <Card>
+   608→        <CardHeader>
+   609→          <CardTitle className="text-lg">All 15 Checkpoints</CardTitle>
+   610→        </CardHeader>
+   611→        <CardContent className="space-y-3">
+   612→          {(['approach', 'jump', 'contact', 'followThrough'] as const).map(phase => {
+   613→            const phaseCheckpoints = (Object.entries(analysis.scores) as [keyof CheckpointScores, number][])
+   614→              .filter(([k]) => CHECKPOINT_LABELS[k].phase === phase)
+   615→            const phaseLabel = phase === 'followThrough' ? 'Follow-Through' : phase.charAt(0).toUpperCase() + phase.slice(1)
+   616→            return (
+   617→              <div key={phase}>
+   618→                <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+   619→                  {phaseLabel}
+   620→                </h4>
+   621→                <div className="grid sm:grid-cols-2 gap-2">
+   622→                  {phaseCheckpoints.map(([key, score]) => (
+   623→                    <div key={key} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
+   624→                      <span className="text-sm">{CHECKPOINT_LABELS[key].label}</span>
+   625→                      <div className="flex items-center gap-2">
+   626→                        <span className={`text-sm font-semibold ${getScoreColor(score)}`}>{score}</span>
+   627→                        <Badge variant="outline" className={`text-[10px] ${getScoreColor(score)}`}>
+   628→                          {getScoreLabel(score)}
+   629→                        </Badge>
+   630→                      </div>
+   631→                    </div>
+   632→                  ))}
+   633→                </div>
+   634→              </div>
+   635→            )
+   636→          })}
+   637→        </CardContent>
+   638→      </Card>
+   639→
+   640→      {/* Strengths & Weaknesses */}
+   641→      <div className="grid sm:grid-cols-2 gap-4">
+   642→        <Card className="p-5">
+   643→          <h3 className="font-semibold mb-3 flex items-center gap-2">
+   644→            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Top Strengths
+   645→          </h3>
+   646→          <ul className="space-y-2">
+   647→            {analysis.topStrengths.map((s, i) => (
+   648→              <li key={i} className="text-sm text-muted-foreground flex gap-2">
+   649→                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+   650→                <span>{s}</span>
+   651→              </li>
+   652→            ))}
+   653→          </ul>
+   654→        </Card>
+   655→        <Card className="p-5">
+   656→          <h3 className="font-semibold mb-3 flex items-center gap-2">
+   657→            <AlertTriangle className="w-5 h-5 text-amber-500" /> Top Weaknesses
+   658→          </h3>
+   659→          <ul className="space-y-2">
+   660→            {analysis.topWeaknesses.map((w, i) => (
+   661→              <li key={i} className="text-sm text-muted-foreground flex gap-2">
+   662→                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+   663→                <span>{w}</span>
+   664→              </li>
+   665→            ))}
+   666→          </ul>
+   667→        </Card>
+   668→      </div>
+   669→
+   670→      {/* Actions */}
+   671→      <div className="flex flex-col sm:flex-row gap-3">
+   672→        <Button size="lg" className="flex-1 gap-2" onClick={onGeneratePlan} disabled={isGenerating}>
+   673→          {isGenerating ? (
+   674→            <>
+   675→              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+   676→                <RotateCcw className="w-4 h-4" />
+   677→              </motion.div>
+   678→              Generating plan...
+   679→            </>
+   680→          ) : (
+   681→            <>Generate 4-Week Training Plan <ArrowRight className="w-4 h-4" /></>
+   682→          )}
+   683→        </Button>
+   684→        <Button variant="outline" size="lg" onClick={onReset}>
+   685→          New Analysis
+   686→        </Button>
+   687→      </div>
+   688→    </div>
+   689→  )
+   690→}
+   691→
+   692→/* ─── Training Plan View ─────────────────────────────────────── */
+   693→
+   694→function TrainingPlanView({
+   695→  plan,
+   696→  onReset,
+   697→}: {
+   698→  plan: TrainingPlan
+   699→  onReset: () => void
+   700→}) {
+   701→  return (
+   702→    <div className="space-y-6">
+   703→      <Card className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
+   704→        <h2 className="text-xl sm:text-2xl font-bold mb-2">Your 4-Week Training Plan</h2>
+   705→        <p className="text-muted-foreground mb-4">{plan.summary}</p>
+   706→        <div className="flex flex-wrap gap-2">
+   707→          {plan.keyFocus.map(f => (
+   708→            <Badge key={f} variant="secondary"><Target className="w-3 h-3 mr-1" />{f}</Badge>
+   709→          ))}
+   710→        </div>
+   711→      </Card>
+   712→
+   713→      <AnimatePresence>
+   714→        {plan.weeks.map((week) => (
+   715→          <motion.div
+   716→            key={week.week}
+   717→            initial={{ opacity: 0, y: 20 }}
+   718→            animate={{ opacity: 1, y: 0 }}
+   719→            transition={{ delay: week.week * 0.1 }}
+   720→          >
+   721→            <Card className="overflow-hidden">
+   722→              <CardHeader className="bg-muted/30">
+   723→                <div className="flex items-center justify-between">
+   724→                  <div>
+   725→                    <Badge variant="outline" className="mb-1">Week {week.week}</Badge>
+   726→                    <CardTitle className="text-lg">{week.title}</CardTitle>
+   727→                  </div>
+   728→                </div>
+   729→                <p className="text-sm text-muted-foreground">{week.focus}</p>
+   730→              </CardHeader>
+   731→              <CardContent className="p-4">
+   732→                <div className="space-y-3">
+   733→                  {week.days.map((day) => (
+   734→                    <div key={day.day} className="border rounded-lg p-3">
+   735→                      <div className="flex items-center justify-between mb-2">
+   736→                        <h4 className="font-medium text-sm">{day.day}</h4>
+   737→                        <Badge variant="secondary" className="text-xs">{day.phase}</Badge>
+   738→                      </div>
+   739→                      <div className="space-y-2">
+   740→                        {day.drills.map((drill, i) => (
+   741→                          <div key={i} className="bg-muted/30 rounded-md p-2.5">
+   742→                            <div className="flex items-start justify-between gap-2">
+   743→                              <div className="flex-1">
+   744→                                <p className="text-sm font-medium">{drill.name}</p>
+   745→                                {drill.cue && (
+   746→                                  <p className="text-xs text-muted-foreground mt-0.5 italic">
+   747→                                    &quot;{drill.cue}&quot;
+   748→                                  </p>
+   749→                                )}
+   750→                              </div>
+   751→                              <div className="text-right shrink-0">
+   752→                                <p className="text-xs font-medium">{drill.sets} × {drill.reps}</p>
+   753→                                {drill.duration && (
+   754→                                  <p className="text-xs text-muted-foreground">{drill.duration}</p>
+   755→                                )}
+   756→                              </div>
+   757→                            </div>
+   758→                          </div>
+   759→                        ))}
+   760→                      </div>
+   761→                    </div>
+   762→                  ))}
+   763→                </div>
+   764→              </CardContent>
+   765→            </Card>
+   766→          </motion.div>
+   767→        ))}
+   768→      </AnimatePresence>
+   769→
+   770→      <div className="flex justify-center pt-4">
+   771→        <Button variant="outline" size="lg" onClick={onReset} className="gap-2">
+   772→          <RotateCcw className="w-4 h-4" /> Start Over
+   773→        </Button>
+   774→      </div>
+   775→    </div>
+   776→  )
+   777→}
