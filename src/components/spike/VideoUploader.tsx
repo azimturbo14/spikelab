@@ -1,6 +1,6 @@
 'use client';
 
-import { Upload, X, Loader2 } from 'lucide-react';
+import { Upload, X, Loader2, AlertCircle } from 'lucide-react';
 import { useCallback, useState, useRef } from 'react';
 import { useI18n } from '@/lib/i18n-store';
 
@@ -9,6 +9,8 @@ interface VideoUploaderProps {
   isAnalyzing: boolean;
   disabled: boolean;
 }
+
+const VIDEO_EXTENSIONS = /\.(mp4|mov|avi|webm|mkv|flv|m4v|3gp|3g2|mts|m2ts|ogv|wmv)$/i;
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -25,12 +27,26 @@ export default function VideoUploader({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(
     (file: File) => {
-      if (!file.type.startsWith('video/')) return;
-      if (file.size > 50 * 1024 * 1024) return;
+      setUploadError(null);
+
+      // Check by MIME type or by extension (mobile browsers sometimes report generic MIME)
+      const isVideoByMime = file.type.startsWith('video/');
+      const isVideoByExt = VIDEO_EXTENSIONS.test(file.name);
+
+      if (!isVideoByMime && !isVideoByExt) {
+        setUploadError(t().uploader.errorNotVideo);
+        return;
+      }
+
+      if (file.size > 50 * 1024 * 1024) {
+        setUploadError(t().uploader.errorTooLarge);
+        return;
+      }
 
       if (videoUrl) {
         URL.revokeObjectURL(videoUrl);
@@ -41,7 +57,7 @@ export default function VideoUploader({
       setVideoUrl(url);
       onVideoReady(file);
     },
-    [videoUrl, onVideoReady]
+    [videoUrl, onVideoReady, t]
   );
 
   const handleDrop = useCallback(
@@ -103,6 +119,7 @@ export default function VideoUploader({
       }
       setSelectedFile(null);
       setVideoUrl(null);
+      setUploadError(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -116,7 +133,7 @@ export default function VideoUploader({
       <input
         ref={fileInputRef}
         type="file"
-        accept="video/mp4,video/quicktime,video/avi,video/webm,video/x-msvideo"
+        accept="video/*"
         onChange={handleInputChange}
         className="hidden"
         disabled={disabled || isAnalyzing}
@@ -131,13 +148,15 @@ export default function VideoUploader({
         className={`
           relative w-full rounded-2xl border-2 border-dashed transition-all duration-200
           ${
-            selectedFile
-              ? 'border-border bg-background'
-              : isDragOver
-                ? 'border-primary bg-primary/5 cursor-pointer'
-                : disabled || isAnalyzing
-                  ? 'border-muted-foreground/20 bg-muted/30 cursor-not-allowed'
-                  : 'border-muted-foreground/30 bg-muted/50 cursor-pointer hover:bg-muted/70 hover:border-muted-foreground/50'
+            uploadError
+              ? 'border-red-200 bg-red-50/50 dark:bg-red-950/20'
+              : selectedFile
+                ? 'border-border bg-background'
+                : isDragOver
+                  ? 'border-primary bg-primary/5 cursor-pointer'
+                  : disabled || isAnalyzing
+                    ? 'border-muted-foreground/20 bg-muted/30 cursor-not-allowed'
+                    : 'border-muted-foreground/30 bg-muted/50 cursor-pointer hover:bg-muted/70 hover:border-muted-foreground/50'
           }
         `}
       >
@@ -220,6 +239,14 @@ export default function VideoUploader({
                 {t().uploader.readyToAnalyze}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Upload error overlay */}
+        {uploadError && (
+          <div className="flex items-center gap-2 px-4 py-3 text-sm text-red-600 dark:text-red-400 border-t border-red-200 dark:border-red-800/40">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{uploadError}</span>
           </div>
         )}
 

@@ -263,13 +263,13 @@ export default function SpikeApp() {
         <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 pb-20">
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabState)}>
             <TabsList className="grid w-full grid-cols-3 mb-8">
-              <TabsTrigger value="upload" className="gap-1.5">
+              <TabsTrigger value="upload" className="gap-1.5" style={{ borderRadius: '6px' }}>
                 <Video className="w-4 h-4" /> {t().tabs.upload}
               </TabsTrigger>
-              <TabsTrigger value="analysis" disabled={!analysis} className="gap-1.5">
+              <TabsTrigger value="analysis" disabled={!analysis} className="gap-1.5" style={{ borderRadius: '6px' }}>
                 <Activity className="w-4 h-4" /> {t().tabs.analysis}
               </TabsTrigger>
-              <TabsTrigger value="training" disabled={!trainingPlan} className="gap-1.5">
+              <TabsTrigger value="training" disabled={!trainingPlan} className="gap-1.5" style={{ borderRadius: '6px' }}>
                 <Dumbbell className="w-4 h-4" /> {t().tabs.training}
               </TabsTrigger>
             </TabsList>

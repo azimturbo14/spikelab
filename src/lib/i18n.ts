@@ -78,6 +78,9 @@ const en = {
     readyToAnalyze: 'Ready to analyze',
     analyzing: 'Analyzing your spike with AI...',
     analyzingSub: 'YOLOv8 pose tracking every frame — about 5-15 seconds',
+    errorNotVideo: 'This file is not a video. Please upload a video file (MP4, MOV, AVI, WebM).',
+    errorTooLarge: 'Video file is too large. Maximum size is 50MB.',
+    errorGeneric: 'Could not read this video file. Please try a different file.',
   },
 
   // Analysis Tab
@@ -304,6 +307,9 @@ const ru: Translations = {
     readyToAnalyze: 'Готово к анализу',
     analyzing: 'ИИ анализирует ваш удар...',
     analyzingSub: 'YOLOv8 отслеживание позы каждый кадр — около 5-15 секунд',
+    errorNotVideo: 'Этот файл не является видео. Загрузите видеофайл (MP4, MOV, AVI, WebM).',
+    errorTooLarge: 'Видеофайл слишком большой. Максимальный размер — 50 МБ.',
+    errorGeneric: 'Не удалось прочитать этот видеофайл. Попробуйте другой файл.',
   },
   analysis: {
     emptyMsg: 'Сначала загрузите и проанализируйте видео, чтобы увидеть результаты.',
@@ -498,6 +504,9 @@ const uz: Translations = {
     readyToAnalyze: 'Tahlilga tayyor',
     analyzing: 'Sun\'iy intellekt zarbangizni tahlil qilmoqda...',
     analyzingSub: 'YOLOv8 har bir kadrda pozitsiyani kuzatish — 5-15 soniya atrofida',
+    errorNotVideo: 'Bu fayl video emas. Iltimos, video fayl yuklang (MP4, MOV, AVI, WebM).',
+    errorTooLarge: 'Video fayli juda katta. Maksimal hajmi — 50 MB.',
+    errorGeneric: 'Ushbu video faylini o\'qib bo\'lmadi. Boshqa faylni sinab ko\'ring.',
   },
   analysis: {
     emptyMsg: 'Natijalarni ko\'rish uchun avval video yuklang va tahlil qiling.',
