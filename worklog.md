@@ -329,3 +329,24 @@ Stage Summary:
 - LanguageToggle component added to header for real-time language switching
 - No logic, styling, icons, or animations were changed — only string literals replaced
 - Position/Experience Select values stay English (for API compatibility), display text is translated
+---
+Task ID: 1
+Agent: Main
+Task: Fix analysis failure and improve frame extraction
+
+Work Log:
+- Discovered extract-frames.ts and visualize-spike route.ts were lost (file system issue)
+- Rewrote analyze-spike route with z-ai vision CLI + smart frame extraction
+- Recreated visualize-spike route from scratch
+- Implemented motion-based frame extraction: ffmpeg scene detection → clustering → density-based window → concentrated frame sampling
+- Removed --thinking flag from z-ai CLI (was causing 110s timeouts and memory crashes)
+- Reduced CLI timeout from 110s to 90s
+- Server requires NODE_OPTIONS="--max-old-space-size=4096" for stability
+- Set up auto-restart script (start.sh) for resilience
+
+Key results:
+- Frame extraction now uses motion detection: finds the densest motion cluster (the spike) and concentrates 8 frames there
+- Analysis time reduced from ~45s to ~33s by removing --thinking
+- API returns full detailed analysis with per-checkpoint feedback, phase scores, priority order
+- Test confirmed: Overall: 60, Level: intermediate, Priority: jump > approach > contact > followThrough
+
