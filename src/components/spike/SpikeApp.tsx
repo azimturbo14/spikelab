@@ -165,20 +165,6 @@ export default function SpikeApp() {
     )
   }
 
-  const featureIcons = [Video, Brain, Target, TrendingUp, Activity, ShieldCheck]
-  const sciencePhaseIcons = [Footprints, Activity, Flame, ShieldCheck]
-  const sciencePhaseColors = [
-    'from-blue-500/10 to-cyan-500/10',
-    'from-violet-500/10 to-purple-500/10',
-    'from-orange-500/10 to-amber-500/10',
-    'from-emerald-500/10 to-green-500/10',
-  ]
-  const sciencePhaseBorders = [
-    'border-blue-500/20',
-    'border-violet-500/20',
-    'border-orange-500/20',
-    'border-emerald-500/20',
-  ]
   const positionLabels = t().positionLabels
   const experienceLabels = t().experienceLabels
 
@@ -201,14 +187,6 @@ export default function SpikeApp() {
               const el = document.getElementById('upload-section')
               el?.scrollIntoView({ behavior: 'smooth' })
             }}>{t().header.nav.analyze}</Button>
-            <Button variant="ghost" size="sm" onClick={() => {
-              const el = document.getElementById('features-section')
-              el?.scrollIntoView({ behavior: 'smooth' })
-            }}>{t().header.nav.features}</Button>
-            <Button variant="ghost" size="sm" onClick={() => {
-              const el = document.getElementById('science-section')
-              el?.scrollIntoView({ behavior: 'smooth' })
-            }}>{t().header.nav.science}</Button>
             <LanguageToggle />
           </nav>
         </div>
@@ -439,67 +417,6 @@ export default function SpikeApp() {
               )}
             </TabsContent>
           </Tabs>
-        </section>
-
-        {/* Features */}
-        <section id="features-section" className="bg-muted/30 py-16 sm:py-20">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6">
-            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
-              {t().features.title}
-            </h2>
-            <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
-              {t().features.description}
-            </p>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {t().features.cards.map((f, idx) => {
-                const Icon = featureIcons[idx]
-                return (
-                  <Card key={f.title} className="p-6">
-                    <Icon className="w-8 h-8 text-orange-500 mb-3" />
-                    <h3 className="font-semibold mb-2">{f.title}</h3>
-                    <p className="text-sm text-muted-foreground">{f.desc}</p>
-                  </Card>
-                )
-              })}
-            </div>
-          </div>
-        </section>
-
-        {/* Science */}
-        <section id="science-section" className="py-16 sm:py-20">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6">
-            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-3">
-              {t().science.title}
-            </h2>
-            <p className="text-muted-foreground text-center max-w-2xl mx-auto mb-12">
-              {t().science.description}
-            </p>
-            <div className="space-y-8">
-              {t().science.phases.map((p, idx) => {
-                const Icon = sciencePhaseIcons[idx]
-                const color = sciencePhaseColors[idx]
-                const border = sciencePhaseBorders[idx]
-                return (
-                  <Card key={p.title} className={`p-6 bg-gradient-to-r ${color} border ${border}`}>
-                    <div className="flex items-start gap-4">
-                      <div className="w-10 h-10 rounded-lg bg-background/80 flex items-center justify-center shrink-0 mt-0.5">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-lg mb-1">{p.title}</h3>
-                        <p className="text-sm text-muted-foreground mb-3">{p.desc}</p>
-                        <div className="flex flex-wrap gap-2">
-                          {p.items.map(item => (
-                            <Badge key={item} variant="secondary" className="text-xs">{item}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </Card>
-                )
-              })}
-            </div>
-          </div>
         </section>
       </main>
 
