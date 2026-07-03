@@ -26,6 +26,7 @@ export interface CheckpointScores {
 export interface PhaseAnalysis {
   score: number;
   feedback: string;
+  specificFix?: string;
 }
 
 export interface PhaseAnalyses {
@@ -37,6 +38,7 @@ export interface PhaseAnalyses {
 
 export interface SpikeAnalysis {
   scores: CheckpointScores;
+  checkpointFeedback?: Record<string, string>;
   phaseAnalysis: PhaseAnalyses;
   topStrengths: string[];
   topWeaknesses: string[];
@@ -44,6 +46,7 @@ export interface SpikeAnalysis {
   estimatedLevel: string;
   estimatedApproachSpeed: string;
   overallPower: number;
+  priorityOrder?: string[];
 }
 
 export interface TrainingWeek {

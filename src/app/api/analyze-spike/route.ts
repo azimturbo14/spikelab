@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { execFile } from 'child_process'
 import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -126,11 +126,11 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
     }
 
     const validPhases = ['approach', 'jump', 'contact', 'followThrough'] as const
-    let priorityOrder: SpikeAnalysis['priorityOrder'] = ['approach', 'contact', 'jump', 'followThrough']
+    let priorityOrder: string[] = ['approach', 'contact', 'jump', 'followThrough']
     if (Array.isArray(data.priorityOrder)) {
       const filtered = data.priorityOrder.filter((p: string) => validPhases.includes(p as any))
       if (filtered.length === 4) {
-        priorityOrder = filtered as SpikeAnalysis['priorityOrder']
+        priorityOrder = filtered
       } else {
         const phaseScores: Record<string, number> = {
           approach: data.phaseAnalysis?.approach?.score ?? avg(approachKeys),
@@ -140,13 +140,12 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
         }
         priorityOrder = (Object.entries(phaseScores) as [string, number][])
           .sort((a, b) => a[1] - b[1])
-          .map(([k]) => k as SpikeAnalysis['priorityOrder'][number])
+          .map(([k]) => k)
       }
     }
 
     return {
       scores: scores as unknown as CheckpointScores,
-      checkpointFeedback: checkpointFeedback as SpikeAnalysis['checkpointFeedback'],
       phaseAnalysis: {
         approach: {
           score: data.phaseAnalysis?.approach?.score ?? avg(approachKeys),
@@ -176,7 +175,7 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
       estimatedApproachSpeed: ['slow', 'moderate', 'fast', 'explosive'].includes(data.estimatedApproachSpeed) ? data.estimatedApproachSpeed : 'moderate',
       overallPower: clampScore(data.overallPower),
       priorityOrder,
-    }
+    } as SpikeAnalysis
   } catch {
     return null
   }
@@ -213,78 +212,175 @@ async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<
   return response.choices?.[0]?.message?.content || ''
 }
 
+/**
+ * Run the VLM analysis with a heartbeat callback that fires every 5 seconds.
+ * This keeps the HTTP connection alive through proxies.
+ */
+async function runVisionWithHeartbeat(
+  imagePaths: string[],
+  prompt: string,
+  onHeartbeat: (elapsed: number) => void
+): Promise<string> {
+  const startTime = Date.now()
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  let heartbeatError: Error | null = null
+
+  // Send heartbeats every 5 seconds
+  heartbeatTimer = setInterval(() => {
+    try {
+      onHeartbeat(Math.round((Date.now() - startTime) / 1000))
+    } catch (e) {
+      heartbeatError = e instanceof Error ? e : new Error(String(e))
+      // Don't clear here — let the promise settle naturally
+    }
+  }, 5000)
+
+  try {
+    const result = await runVisionAnalysis(imagePaths, prompt)
+    return result
+  } finally {
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
+    if (heartbeatError) throw heartbeatError
+  }
+}
+
 export async function POST(request: NextRequest) {
   let tempDir = ''
 
-  try {
-    const formData = await request.formData()
-    const videoFile = formData.get('video') as File | null
+  // Create a streaming response to keep the connection alive
+  const encoder = new TextEncoder()
+  let resolveStream: () => void = () => {}
+  const stream = new ReadableStream({
+    start(controller) {
+      resolveStream = () => {
+        try { controller.close() } catch { /* already closed */ }
+      }
+      // Expose a way to send events
+      ;(stream as unknown as { __controller: typeof controller }).__controller = controller
+    },
+  })
 
-    if (!videoFile) {
-      return NextResponse.json({ error: 'No video file provided' }, { status: 400 })
-    }
-
-    if (!videoFile.type.startsWith('video/') && !videoFile.name.match(/\.(mp4|mov|avi|webm|mkv|flv)$/i)) {
-      return NextResponse.json({ error: 'Invalid file type. Please upload a video (MP4, MOV, AVI, WebM).' }, { status: 400 })
-    }
-
-    if (videoFile.size > 50 * 1024 * 1024) {
-      return NextResponse.json({ error: 'Video file too large. Maximum 50MB.' }, { status: 400 })
-    }
-
-    tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
-    const ext = videoFile.name.split('.').pop() || 'mp4'
-    const videoPath = path.join(tempDir, `spike_video.${ext}`)
-
-    const bytes = await videoFile.arrayBuffer()
-    await writeFile(videoPath, Buffer.from(bytes))
-
-    const playerName = (formData.get('name') as string) || 'the player'
-    const position = (formData.get('position') as string) || 'Outside Hitter'
-    const experience = (formData.get('experience') as string) || 'Intermediate'
-
-    console.log(`[SpikeLab] Analyzing video: ${videoFile.name} (${(videoFile.size / 1024 / 1024).toFixed(1)}MB)`)
-
-    // Extract 8 frames using motion detection
-    const frameCount = 8
-    const framePaths = await extractFrames(videoPath, tempDir, frameCount)
-    console.log(`[SpikeLab] Extracted ${framePaths.length} frames from video`)
-
-    const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video. Pay special attention to the torso/spine position during the airborne phase.`
-
-    const rawContent = await runVisionAnalysis(framePaths, fullPrompt)
-    console.log(`[SpikeLab] VLM response received (${rawContent.length} chars)`)
-
-    if (!rawContent) {
-      console.error('[SpikeLab] Empty VLM response')
-      return NextResponse.json(
-        { error: 'AI analysis returned no content. Please try a clearer or shorter video.' },
-        { status: 500 }
-      )
-    }
-
-    const analysis = parseAndValidate(rawContent)
-    if (!analysis) {
-      console.error('[SpikeLab] Parse failed. Content preview:', rawContent.substring(0, 500))
-      return NextResponse.json(
-        { error: 'Could not parse AI results. Please try again.' },
-        { status: 500 }
-      )
-    }
-
-    console.log(`[SpikeLab] Analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}, Priority: ${analysis.priorityOrder.join(' > ')}`)
-    return NextResponse.json({ analysis })
-  } catch (err: unknown) {
-    console.error('[SpikeLab] Error:', err)
-    const message = err instanceof Error ? err.message : 'An unexpected error occurred'
-    return NextResponse.json({ error: message }, { status: 500 })
-  } finally {
-    if (tempDir) {
-      try {
-        const files = await readdir(tempDir).catch(() => [])
-        for (const f of files) await unlink(path.join(tempDir, f)).catch(() => {})
-        await unlink(tempDir).catch(() => {})
-      } catch { /* ignore cleanup errors */ }
-    }
+  const send = (data: unknown) => {
+    try {
+      const ctrl = (stream as unknown as { __controller?: ReadableStreamDefaultController }).__controller
+      if (ctrl) {
+        ctrl.enqueue(encoder.encode(JSON.stringify(data) + '\n'))
+      }
+    } catch { /* stream may be closed */ }
   }
+
+  const sendError = (message: string, status?: string) => {
+    send({ type: 'error', message, status: status || 'error' })
+  }
+
+  const sendProgress = (step: string, message: string, percent?: number) => {
+    send({ type: 'progress', step, message, percent: percent ?? 0 })
+  }
+
+  // Run the analysis asynchronously
+  ;(async () => {
+    try {
+      const formData = await request.formData()
+      const videoFile = formData.get('video') as File | null
+
+      if (!videoFile) {
+        sendError('No video file provided')
+        return
+      }
+
+      if (!videoFile.type.startsWith('video/') && !videoFile.name.match(/\.(mp4|mov|avi|webm|mkv|flv|m4v|3gp|3g2|mts|m2ts|ogv|wmv)$/i)) {
+        sendError('Invalid file type. Please upload a video (MP4, MOV, AVI, WebM).')
+        return
+      }
+
+      if (videoFile.size > 50 * 1024 * 1024) {
+        sendError('Video file too large. Maximum 50MB.')
+        return
+      }
+
+      tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
+      const ext = videoFile.name.split('.').pop() || 'mp4'
+      const videoPath = path.join(tempDir, `spike_video.${ext}`)
+
+      const bytes = await videoFile.arrayBuffer()
+      await writeFile(videoPath, Buffer.from(bytes))
+
+      const playerName = (formData.get('name') as string) || 'the player'
+      const position = (formData.get('position') as string) || 'Outside Hitter'
+      const experience = (formData.get('experience') as string) || 'Intermediate'
+
+      console.log(`[SpikeLab] Analyzing video: ${videoFile.name} (${(videoFile.size / 1024 / 1024).toFixed(1)}MB)`)
+
+      // Step 1: Extract frames
+      sendProgress('extracting', 'Extracting key frames from video...', 10)
+
+      const frameCount = 8
+      const framePaths = await extractFrames(videoPath, tempDir, frameCount)
+      console.log(`[SpikeLab] Extracted ${framePaths.length} frames from video`)
+
+      if (framePaths.length === 0) {
+        sendError('Could not extract any frames from the video. Please try a different video.')
+        return
+      }
+
+      sendProgress('extracted', `Extracted ${framePaths.length} frames. Preparing AI analysis...`, 25)
+
+      // Step 2: AI Analysis with heartbeat
+      const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video. Pay special attention to the torso/spine position during the airborne phase.`
+
+      sendProgress('analyzing', 'AI is analyzing your spike technique...', 35)
+
+      const rawContent = await runVisionWithHeartbeat(framePaths, fullPrompt, (elapsed) => {
+        // Send heartbeat progress to keep connection alive
+        const pct = Math.min(35 + Math.round((elapsed / 60) * 55), 90)
+        sendProgress('analyzing', `AI analyzing... (${elapsed}s elapsed)`, pct)
+      })
+
+      console.log(`[SpikeLab] VLM response received (${rawContent.length} chars)`)
+
+      if (!rawContent) {
+        console.error('[SpikeLab] Empty VLM response')
+        sendError('AI analysis returned no content. Please try a clearer or shorter video.')
+        return
+      }
+
+      sendProgress('parsing', 'Processing AI results...', 92)
+
+      const analysis = parseAndValidate(rawContent)
+      if (!analysis) {
+        console.error('[SpikeLab] Parse failed. Content preview:', rawContent.substring(0, 500))
+        sendError('Could not parse AI results. Please try again.')
+        return
+      }
+
+      console.log(`[SpikeLab] Analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}, Priority: ${analysis.priorityOrder?.join(' > ')}`)
+
+      // Send the final result
+      sendProgress('done', 'Analysis complete!', 100)
+      send({ type: 'result', analysis })
+    } catch (err: unknown) {
+      console.error('[SpikeLab] Error:', err)
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred'
+      sendError(message)
+    } finally {
+      if (tempDir) {
+        try {
+          const files = await readdir(tempDir).catch(() => [])
+          for (const f of files) await unlink(path.join(tempDir, f)).catch(() => {})
+          await unlink(tempDir).catch(() => {})
+        } catch { /* ignore cleanup errors */ }
+      }
+      resolveStream()
+    }
+  })()
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache, no-store',
+      'X-Accel-Buffering': 'no', // Disable nginx buffering
+      'Connection': 'keep-alive',
+    },
+  })
 }

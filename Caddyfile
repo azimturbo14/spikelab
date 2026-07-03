@@ -1,4 +1,13 @@
 :81 {
+        # Increase timeouts for long-running API calls (AI analysis takes 60+ seconds)
+        timeouts {
+                read_body   300s
+                read_header 10s
+                read         300s
+                write        300s
+                idle         300s
+        }
+
         @transform_port_query {
                 query XTransformPort=*
         }
@@ -21,6 +30,9 @@
                         header_up X-Forwarded-For {remote_host}
                         header_up X-Forwarded-Proto {scheme}
                         header_up X-Real-IP {remote_host}
+                        transport http {
+                                read_timeout 300s
+                        }
                 }
         }
 
@@ -30,6 +42,9 @@
                         header_up X-Forwarded-For {remote_host}
                         header_up X-Forwarded-Proto {scheme}
                         header_up X-Real-IP {remote_host}
+                        transport http {
+                                read_timeout 300s
+                        }
                 }
         }
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, Component, type ReactNode, type ErrorInfo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
@@ -37,6 +37,34 @@ import { useI18n } from '@/lib/i18n-store'
 
 type TabState = 'upload' | 'analysis' | 'training'
 
+/* ─── Analysis Error Boundary ────────────────────────────────── */
+interface ErrorBoundaryProps { children: ReactNode; onError: (msg: string) => void }
+interface ErrorBoundaryState { hasError: boolean; error: string | null }
+class AnalysisErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) { super(props); this.state = { hasError: false, error: null } }
+  static getDerivedStateFromError(err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { hasError: true, error: msg }
+  }
+  componentDidCatch(err: unknown, info: ErrorInfo) {
+    console.error('[SpikeLab] AnalysisView render error:', err, info.componentStack)
+    this.props.onError(err instanceof Error ? err.message : String(err))
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-destructive/10 text-destructive rounded-lg p-6 text-center">
+          <AlertTriangle className="w-8 h-8 mx-auto mb-3" />
+          <p className="font-medium mb-1">Rendering Error</p>
+          <p className="text-sm text-destructive/80 mb-3">{this.state.error}</p>
+          <p className="text-xs text-muted-foreground">Please try again with a different video.</p>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 export default function SpikeApp() {
   const { t } = useI18n()
   const [mounted, setMounted] = useState(false)
@@ -49,6 +77,9 @@ export default function SpikeApp() {
   const [trainingPlan, setTrainingPlan] = useState<TrainingPlan | null>(null)
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progressStep, setProgressStep] = useState('')
+  const [progressMsg, setProgressMsg] = useState('')
+  const [progressPct, setProgressPct] = useState(0)
 
   const [profile, setProfile] = useState<PlayerProfile>({
     name: '',
@@ -67,9 +98,12 @@ export default function SpikeApp() {
     setError(null)
     setAnalysis(null)
     setTrainingPlan(null)
+    setProgressStep('starting')
+    setProgressMsg('')
+    setProgressPct(0)
 
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 180_000) // 3 min timeout
+    const timeoutId = setTimeout(() => controller.abort(), 300_000) // 5 min timeout
 
     try {
       const formData = new FormData()
@@ -78,11 +112,13 @@ export default function SpikeApp() {
       formData.append('position', profile.position)
       formData.append('experience', profile.experience)
 
+      console.log('[SpikeLab Client] Starting streaming analysis request...')
       const res = await fetch('/api/analyze-spike', {
         method: 'POST',
         body: formData,
         signal: controller.signal,
       })
+      console.log('[SpikeLab Client] Response status:', res.status, res.statusText)
 
       if (!res.ok) {
         let errMsg = t().errors.analysisFailed
@@ -90,29 +126,81 @@ export default function SpikeApp() {
           const errData = await res.json()
           errMsg = errData.error || errMsg
         } catch { /* response wasn't JSON */ }
+        console.error('[SpikeLab Client] API error:', res.status, errMsg)
         throw new Error(errMsg)
       }
 
-      const data = await res.json()
-      if (data.analysis) {
-        setAnalysis(data.analysis)
-        setActiveTab('analysis')
-      } else if (data.scores) {
-        // API returned analysis directly without wrapper
-        setAnalysis(data as unknown as import('@/lib/spike-types').SpikeAnalysis)
-        setActiveTab('analysis')
-      } else {
-        throw new Error(t().errors.unexpectedFormat)
+      // Read streaming NDJSON response
+      const reader = res.body?.getReader()
+      if (!reader) {
+        throw new Error('No response stream available')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let resultReceived = false
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || '' // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const event = JSON.parse(line)
+            console.log('[SpikeLab Client] Event:', event.type, event.step || '', event.message || '')
+
+            if (event.type === 'progress') {
+              setProgressStep(event.step || '')
+              setProgressMsg(event.message || '')
+              if (typeof event.percent === 'number') setProgressPct(event.percent)
+            } else if (event.type === 'result') {
+              resultReceived = true
+              const analysisData = event.analysis
+              if (!analysisData?.scores || !analysisData?.phaseAnalysis) {
+                console.error('[SpikeLab Client] Invalid analysis data in stream')
+                throw new Error(t().errors.unexpectedFormat)
+              }
+              console.log('[SpikeLab Client] Analysis result received, switching tab')
+              setAnalysis(analysisData as SpikeAnalysis)
+              setActiveTab('analysis')
+            } else if (event.type === 'error') {
+              throw new Error(event.message || t().errors.somethingWentWrong)
+            }
+          } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message !== t().errors.unexpectedFormat && parseErr.message !== t().errors.somethingWentWrong) {
+              // JSON parse error for this line — skip it (could be partial)
+              console.warn('[SpikeLab Client] Skipped non-JSON line:', line.substring(0, 100))
+            } else {
+              throw parseErr
+            }
+          }
+        }
+      }
+
+      if (!resultReceived) {
+        console.error('[SpikeLab Client] Stream ended without result')
+        throw new Error(t().errors.somethingWentWrong)
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
+        console.error('[SpikeLab Client] Request timed out')
         setError(t().errors.timeout)
       } else {
-        setError(err instanceof Error ? err.message : t().errors.somethingWentWrong)
+        const msg = err instanceof Error ? err.message : t().errors.somethingWentWrong
+        console.error('[SpikeLab Client] Analysis error:', msg, err)
+        setError(msg)
       }
     } finally {
       clearTimeout(timeoutId)
       setIsAnalyzing(false)
+      setProgressStep('')
+      setProgressMsg('')
+      setProgressPct(0)
     }
   }
 
@@ -336,6 +424,18 @@ export default function SpikeApp() {
                     </div>
                   )}
 
+                  {/* Progress Bar during analysis */}
+                  {isAnalyzing && (
+                    <div className="space-y-2 pt-2">
+                      <Progress value={progressPct} className="h-2" />
+                      {progressMsg && (
+                        <p className="text-sm text-muted-foreground text-center animate-pulse">
+                          {progressMsg}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {/* Action Buttons */}
                   <div className="flex flex-col sm:flex-row gap-3 pt-2">
                     <Button
@@ -352,7 +452,10 @@ export default function SpikeApp() {
                           >
                             <RotateCcw className="w-4 h-4" />
                           </motion.div>
-                          {t().upload.analyzingBtn}
+                          {progressMsg || t().upload.analyzingBtn}
+                          {progressPct > 0 && (
+                            <span className="text-xs opacity-70">({progressPct}%)</span>
+                          )}
                         </>
                       ) : (
                         <>
@@ -373,13 +476,15 @@ export default function SpikeApp() {
             {/* Tab 2: Analysis */}
             <TabsContent value="analysis">
               {analysis ? (
-                <AnalysisView
-                  analysis={analysis}
-                  playerName={profile.name}
-                  onGeneratePlan={handleGeneratePlan}
-                  isGenerating={isGeneratingPlan}
-                  onReset={handleReset}
-                />
+                <AnalysisErrorBoundary onError={(msg) => { setError(msg); setActiveTab('upload') }}>
+                  <AnalysisView
+                    analysis={analysis}
+                    playerName={profile.name}
+                    onGeneratePlan={handleGeneratePlan}
+                    isGenerating={isGeneratingPlan}
+                    onReset={handleReset}
+                  />
+                </AnalysisErrorBoundary>
               ) : (
                 <Card className="p-8 text-center text-muted-foreground">
                   <Activity className="w-10 h-10 mx-auto mb-3 opacity-50" />
@@ -454,9 +559,10 @@ function AnalysisView({
 }) {
   const { t } = useI18n()
 
-  const overallAvg = Math.round(
-    Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 16
-  )
+  const scoreValues = Object.values(analysis?.scores ?? {}).filter((v): v is number => typeof v === 'number')
+  const overallAvg = scoreValues.length > 0
+    ? Math.round(scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length)
+    : 0
 
   const phases = [
     { key: 'approach' as const, label: t().analysis.phaseApproach, labelKey: 'phaseLabelApproach' as const, icon: Footprints, color: 'text-blue-500' },
@@ -505,7 +611,7 @@ function AnalysisView({
             </div>
             <div className="text-center sm:text-left flex-1">
               <div className="flex items-center gap-2 mb-2">
-                <Badge variant="secondary">{analysis.estimatedLevel}</Badge>
+                <Badge variant="secondary">{analysis.estimatedLevel || 'intermediate'}</Badge>
                 <Badge variant="outline" className="text-xs font-normal">
                   YOLOv8 Pose Tracking
                 </Badge>
@@ -514,7 +620,7 @@ function AnalysisView({
                 {playerName ? `${playerName}'s` : t().analysis.yourSpikeAnalysis}
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                {analysis.coachNotes}
+                {analysis.coachNotes || ''}
               </p>
             </div>
           </div>
@@ -524,7 +630,9 @@ function AnalysisView({
       {/* Phase Scores */}
       <div className="grid sm:grid-cols-2 gap-4">
         {phases.map(({ key, label, icon: Icon, color }) => {
-          const phase = analysis.phaseAnalysis[key]
+          const phase = analysis.phaseAnalysis?.[key]
+          if (!phase) return null
+          const score = typeof phase.score === 'number' ? phase.score : 50
           return (
             <Card key={key} className="p-5">
               <div className="flex items-center justify-between mb-3">
@@ -532,10 +640,10 @@ function AnalysisView({
                   <Icon className={`w-5 h-5 ${color}`} />
                   <h3 className="font-semibold">{label}</h3>
                 </div>
-                <span className={`text-2xl font-bold ${getScoreColor(phase.score)}`}>{phase.score}</span>
+                <span className={`text-2xl font-bold ${getScoreColor(score)}`}>{score}</span>
               </div>
-              <Progress value={phase.score} className="h-2 mb-3" />
-              <p className="text-sm text-muted-foreground">{phase.feedback}</p>
+              <Progress value={score} className="h-2 mb-3" />
+              <p className="text-sm text-muted-foreground">{phase.feedback || ''}</p>
             </Card>
           )
         })}
@@ -548,26 +656,31 @@ function AnalysisView({
         </CardHeader>
         <CardContent className="space-y-3">
           {(['approach', 'jump', 'contact', 'followThrough'] as const).map(phase => {
-            const phaseCheckpoints = (Object.entries(analysis.scores) as [keyof CheckpointScores, number][])
-              .filter(([k]) => CHECKPOINT_LABELS[k]?.phase === phase)
-            const phaseLabel = phaseLabelMap[phase]
+            const scoresObj = analysis.scores ?? {}
+            const phaseCheckpoints = Object.entries(scoresObj)
+              .filter(([k, v]) => typeof v === 'number' && CHECKPOINT_LABELS[k as keyof typeof CHECKPOINT_LABELS]?.phase === phase)
+            const phaseLabel = phaseLabelMap[phase] || phase
+            if (phaseCheckpoints.length === 0) return null
             return (
               <div key={phase}>
                 <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                   {phaseLabel}
                 </h4>
                 <div className="grid sm:grid-cols-2 gap-2">
-                  {phaseCheckpoints.map(([key, score]) => (
-                    <div key={key} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
-                      <span className="text-sm">{checkpoints[key as keyof typeof checkpoints]}</span>
-                      <div className="flex items-center gap-2">
-                        <span className={`text-sm font-semibold ${getScoreColor(score)}`}>{score}</span>
-                        <Badge variant="outline" className={`text-[10px] ${getScoreColor(score)}`}>
-                          {getScoreLabel(score)}
-                        </Badge>
+                  {phaseCheckpoints.map(([key, score]) => {
+                    const label = checkpoints[key as keyof typeof checkpoints] ?? key
+                    return (
+                      <div key={key} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
+                        <span className="text-sm">{label}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-semibold ${getScoreColor(score as number)}`}>{score}</span>
+                          <Badge variant="outline" className={`text-[10px] ${getScoreColor(score as number)}`}>
+                            {getScoreLabel(score as number)}
+                          </Badge>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )
@@ -582,7 +695,7 @@ function AnalysisView({
             <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {t().analysis.topStrengths}
           </h3>
           <ul className="space-y-2">
-            {analysis.topStrengths.map((s, i) => (
+            {(analysis.topStrengths ?? []).map((s, i) => (
               <li key={i} className="text-sm text-muted-foreground flex gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                 <span>{s}</span>
@@ -595,7 +708,7 @@ function AnalysisView({
             <AlertTriangle className="w-5 h-5 text-amber-500" /> {t().analysis.topWeaknesses}
           </h3>
           <ul className="space-y-2">
-            {analysis.topWeaknesses.map((w, i) => (
+            {(analysis.topWeaknesses ?? []).map((w, i) => (
               <li key={i} className="text-sm text-muted-foreground flex gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                 <span>{w}</span>
