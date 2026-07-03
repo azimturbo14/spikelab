@@ -549,7 +549,7 @@ function AnalysisView({
         <CardContent className="space-y-3">
           {(['approach', 'jump', 'contact', 'followThrough'] as const).map(phase => {
             const phaseCheckpoints = (Object.entries(analysis.scores) as [keyof CheckpointScores, number][])
-              .filter(([k]) => CHECKPOINT_LABELS[k].phase === phase)
+              .filter(([k]) => CHECKPOINT_LABELS[k]?.phase === phase)
             const phaseLabel = phaseLabelMap[phase]
             return (
               <div key={phase}>
