@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { execFile } from 'child_process'
 import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -6,6 +6,7 @@ import path from 'path'
 import ZAI from 'z-ai-web-dev-sdk'
 import type { SpikeAnalysis, CheckpointScores } from '@/lib/spike-types'
 import { extractFrames } from '@/lib/extract-frames'
+import { createJob, updateJob, completeJob, failJob } from '@/lib/analysis-jobs'
 
 export const maxDuration = 120
 export const dynamic = 'force-dynamic'
@@ -115,16 +116,6 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
     const followKeys = ['follow_through', 'landing_balance']
     const avg = (keys: string[]) => Math.round(keys.reduce((s, k) => s + scores[k], 0) / keys.length)
 
-    const checkpointFeedback: Record<string, string> = {}
-    if (data.checkpointFeedback && typeof data.checkpointFeedback === 'object') {
-      for (const key of scoreKeys) {
-        const fb = data.checkpointFeedback[key]
-        if (typeof fb === 'string' && fb.trim()) {
-          checkpointFeedback[key] = fb.trim()
-        }
-      }
-    }
-
     const validPhases = ['approach', 'jump', 'contact', 'followThrough'] as const
     let priorityOrder: string[] = ['approach', 'contact', 'jump', 'followThrough']
     if (Array.isArray(data.priorityOrder)) {
@@ -181,14 +172,13 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
   }
 }
 
-/** Cached ZAI instance to avoid re-initializing on every request */
+/** Cached ZAI instance */
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null
 async function getZai() {
   if (!zaiInstance) zaiInstance = await ZAI.create()
   return zaiInstance
 }
 
-/** Run VLM analysis using SDK (max_tokens prevents truncation) */
 async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<string> {
   const zai = await getZai()
   const content: Array<{ type: string; image_url?: { url: string }; text?: string }> = [
@@ -213,169 +203,114 @@ async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<
 }
 
 /**
- * Run the VLM analysis with a heartbeat callback that fires every 5 seconds.
- * This keeps the HTTP connection alive through proxies.
+ * POST: Start an analysis job. Returns immediately with { jobId }.
+ * The actual processing happens in the background.
  */
-async function runVisionWithHeartbeat(
-  imagePaths: string[],
-  prompt: string,
-  onHeartbeat: (elapsed: number) => void
-): Promise<string> {
-  const startTime = Date.now()
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
-  let heartbeatError: Error | null = null
-
-  // Send heartbeats every 5 seconds
-  heartbeatTimer = setInterval(() => {
-    try {
-      onHeartbeat(Math.round((Date.now() - startTime) / 1000))
-    } catch (e) {
-      heartbeatError = e instanceof Error ? e : new Error(String(e))
-      // Don't clear here — let the promise settle naturally
-    }
-  }, 5000)
-
-  try {
-    const result = await runVisionAnalysis(imagePaths, prompt)
-    return result
-  } finally {
-    if (heartbeatTimer) clearInterval(heartbeatTimer)
-    if (heartbeatError) throw heartbeatError
-  }
-}
-
 export async function POST(request: NextRequest) {
   let tempDir = ''
 
-  // Create a streaming response to keep the connection alive
-  const encoder = new TextEncoder()
-  let streamController: ReadableStreamDefaultController | null = null
-  const stream = new ReadableStream({
-    start(controller) {
-      streamController = controller
-    },
-  })
+  try {
+    const formData = await request.formData()
+    const videoFile = formData.get('video') as File | null
 
-  const send = (data: unknown) => {
-    try {
-      if (streamController) {
-        streamController.enqueue(encoder.encode(JSON.stringify(data) + '\n'))
-      }
-    } catch { /* stream may be closed */ }
-  }
-
-  const sendError = (message: string, status?: string) => {
-    send({ type: 'error', message, status: status || 'error' })
-  }
-
-  const sendProgress = (step: string, message: string, percent?: number) => {
-    send({ type: 'progress', step, message, percent: percent ?? 0 })
-  }
-
-  // Run the analysis asynchronously
-  ;(async () => {
-    try {
-      const formData = await request.formData()
-      const videoFile = formData.get('video') as File | null
-
-      if (!videoFile) {
-        sendError('No video file provided')
-        return
-      }
-
-      if (!videoFile.type.startsWith('video/') && !videoFile.name.match(/\.(mp4|mov|avi|webm|mkv|flv|m4v|3gp|3g2|mts|m2ts|ogv|wmv)$/i)) {
-        sendError('Invalid file type. Please upload a video (MP4, MOV, AVI, WebM).')
-        return
-      }
-
-      if (videoFile.size > 50 * 1024 * 1024) {
-        sendError('Video file too large. Maximum 50MB.')
-        return
-      }
-
-      tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
-      const ext = videoFile.name.split('.').pop() || 'mp4'
-      const videoPath = path.join(tempDir, `spike_video.${ext}`)
-
-      const bytes = await videoFile.arrayBuffer()
-      await writeFile(videoPath, Buffer.from(bytes))
-
-      const playerName = (formData.get('name') as string) || 'the player'
-      const position = (formData.get('position') as string) || 'Outside Hitter'
-      const experience = (formData.get('experience') as string) || 'Intermediate'
-
-      console.log(`[SpikeLab] Analyzing video: ${videoFile.name} (${(videoFile.size / 1024 / 1024).toFixed(1)}MB)`)
-
-      // Step 1: Extract frames
-      sendProgress('extracting', 'Extracting key frames from video...', 10)
-
-      const frameCount = 8
-      const framePaths = await extractFrames(videoPath, tempDir, frameCount)
-      console.log(`[SpikeLab] Extracted ${framePaths.length} frames from video`)
-
-      if (framePaths.length === 0) {
-        sendError('Could not extract any frames from the video. Please try a different video.')
-        return
-      }
-
-      sendProgress('extracted', `Extracted ${framePaths.length} frames. Preparing AI analysis...`, 25)
-
-      // Step 2: AI Analysis with heartbeat
-      const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video. Pay special attention to the torso/spine position during the airborne phase.`
-
-      sendProgress('analyzing', 'AI is analyzing your spike technique...', 35)
-
-      const rawContent = await runVisionWithHeartbeat(framePaths, fullPrompt, (elapsed) => {
-        // Send heartbeat progress to keep connection alive
-        const pct = Math.min(35 + Math.round((elapsed / 60) * 55), 90)
-        sendProgress('analyzing', `AI analyzing... (${elapsed}s elapsed)`, pct)
-      })
-
-      console.log(`[SpikeLab] VLM response received (${rawContent.length} chars)`)
-
-      if (!rawContent) {
-        console.error('[SpikeLab] Empty VLM response')
-        sendError('AI analysis returned no content. Please try a clearer or shorter video.')
-        return
-      }
-
-      sendProgress('parsing', 'Processing AI results...', 92)
-
-      const analysis = parseAndValidate(rawContent)
-      if (!analysis) {
-        console.error('[SpikeLab] Parse failed. Content preview:', rawContent.substring(0, 500))
-        sendError('Could not parse AI results. Please try again.')
-        return
-      }
-
-      console.log(`[SpikeLab] Analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}, Priority: ${analysis.priorityOrder?.join(' > ')}`)
-
-      // Send the final result
-      sendProgress('done', 'Analysis complete!', 100)
-      send({ type: 'result', analysis })
-    } catch (err: unknown) {
-      console.error('[SpikeLab] Error:', err)
-      const message = err instanceof Error ? err.message : 'An unexpected error occurred'
-      sendError(message)
-    } finally {
-      if (tempDir) {
-        try {
-          const files = await readdir(tempDir).catch(() => [])
-          for (const f of files) await unlink(path.join(tempDir, f)).catch(() => {})
-          await unlink(tempDir).catch(() => {})
-        } catch { /* ignore cleanup errors */ }
-      }
-      try { streamController?.close() } catch { /* already closed */ }
+    if (!videoFile) {
+      return NextResponse.json({ error: 'No video file provided' }, { status: 400 })
     }
-  })()
 
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/x-ndjson',
-      'Cache-Control': 'no-cache, no-store',
-      'X-Accel-Buffering': 'no', // Disable nginx buffering
-      'Connection': 'keep-alive',
-    },
-  })
+    if (!videoFile.type.startsWith('video/') && !videoFile.name.match(/\.(mp4|mov|avi|webm|mkv|flv|m4v|3gp|3g2|mts|m2ts|ogv|wmv)$/i)) {
+      return NextResponse.json({ error: 'Invalid file type. Please upload a video (MP4, MOV, AVI, WebM).' }, { status: 400 })
+    }
+
+    if (videoFile.size > 50 * 1024 * 1024) {
+      return NextResponse.json({ error: 'Video file too large. Maximum 50MB.' }, { status: 400 })
+    }
+
+    // Create job immediately — response is fast, no proxy timeout
+    const job = createJob()
+    const jobId = job.id
+
+    // Read all form data now (while request is still alive)
+    const playerName = (formData.get('name') as string) || 'the player'
+    const position = (formData.get('position') as string) || 'Outside Hitter'
+    const experience = (formData.get('experience') as string) || 'Intermediate'
+
+    // Read video bytes into buffer while request is active
+    const videoBytes = new Uint8Array(await videoFile.arrayBuffer())
+    const videoName = videoFile.name
+    const videoSize = videoFile.size
+
+    // Return immediately with jobId — client will poll for results
+    // Process in background — keep a reference to prevent GC in Next.js
+    const bgPromise = (async () => {
+      try {
+        tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
+        const ext = videoName.split('.').pop() || 'mp4'
+        const videoPath = path.join(tempDir, `spike_video.${ext}`)
+
+        await writeFile(videoPath, Buffer.from(videoBytes))
+
+        console.log(`[SpikeLab] [${jobId}] Analyzing video: ${videoName} (${(videoSize / 1024 / 1024).toFixed(1)}MB)`)
+
+        // Step 1: Extract frames
+        updateJob(jobId, { step: 'extracting', message: 'Extracting key frames from video...', percent: 10 })
+
+        const frameCount = 8
+        const framePaths = await extractFrames(videoPath, tempDir, frameCount)
+        console.log(`[SpikeLab] [${jobId}] Extracted ${framePaths.length} frames from video`)
+
+        if (framePaths.length === 0) {
+          failJob(jobId, 'Could not extract any frames from the video. Please try a different video.')
+          return
+        }
+
+        updateJob(jobId, { step: 'extracted', message: `Extracted ${framePaths.length} frames. Preparing AI analysis...`, percent: 25 })
+
+        // Step 2: AI Analysis
+        const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video.`
+
+        updateJob(jobId, { step: 'analyzing', message: 'AI is analyzing your spike technique...', percent: 35 })
+
+        const rawContent = await runVisionAnalysis(framePaths, fullPrompt)
+        console.log(`[SpikeLab] [${jobId}] VLM response received (${rawContent.length} chars)`)
+
+        if (!rawContent) {
+          failJob(jobId, 'AI analysis returned no content. Please try a clearer or shorter video.')
+          return
+        }
+
+        updateJob(jobId, { step: 'parsing', message: 'Processing AI results...', percent: 92 })
+
+        const analysis = parseAndValidate(rawContent)
+        if (!analysis) {
+          console.error(`[SpikeLab] [${jobId}] Parse failed. Content preview:`, rawContent.substring(0, 500))
+          failJob(jobId, 'Could not parse AI results. Please try again.')
+          return
+        }
+
+        console.log(`[SpikeLab] [${jobId}] Analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}`)
+        completeJob(jobId, analysis)
+      } catch (err: unknown) {
+        console.error(`[SpikeLab] [${jobId}] Error:`, err)
+        const message = err instanceof Error ? err.message : 'An unexpected error occurred'
+        failJob(jobId, message)
+      } finally {
+        if (tempDir) {
+          try {
+            const files = await readdir(tempDir).catch(() => [])
+            for (const f of files) await unlink(path.join(tempDir, f)).catch(() => {})
+            await unlink(tempDir).catch(() => {})
+          } catch { /* ignore */ }
+        }
+      }
+    })()
+
+    // Keep a global reference to prevent Next.js/Turbopack from GC'ing the background promise
+    ;(globalThis as unknown as Record<string, unknown>).__spikelab_bg = bgPromise
+
+    return NextResponse.json({ jobId })
+  } catch (err: unknown) {
+    console.error('[SpikeLab] Error reading request:', err)
+    const message = err instanceof Error ? err.message : 'Failed to start analysis'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }

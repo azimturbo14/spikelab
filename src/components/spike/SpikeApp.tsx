@@ -103,88 +103,85 @@ export default function SpikeApp() {
     setProgressPct(0)
 
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 300_000) // 5 min timeout
+    const timeoutId = setTimeout(() => controller.abort(), 300_000) // 5 min total timeout
 
     try {
+      // Step 1: Upload video and get a jobId (fast response, no proxy timeout)
       const formData = new FormData()
       formData.append('video', videoFile)
       formData.append('name', profile.name)
       formData.append('position', profile.position)
       formData.append('experience', profile.experience)
 
-      console.log('[SpikeLab Client] Starting streaming analysis request...')
-      const res = await fetch('/api/analyze-spike', {
+      console.log('[SpikeLab Client] Uploading video...')
+      const uploadRes = await fetch('/api/analyze-spike', {
         method: 'POST',
         body: formData,
         signal: controller.signal,
       })
-      console.log('[SpikeLab Client] Response status:', res.status, res.statusText)
 
-      if (!res.ok) {
+      if (!uploadRes.ok) {
         let errMsg = t().errors.analysisFailed
         try {
-          const errData = await res.json()
+          const errData = await uploadRes.json()
           errMsg = errData.error || errMsg
         } catch { /* response wasn't JSON */ }
-        console.error('[SpikeLab Client] API error:', res.status, errMsg)
+        console.error('[SpikeLab Client] Upload error:', uploadRes.status, errMsg)
         throw new Error(errMsg)
       }
 
-      // Read streaming NDJSON response
-      const reader = res.body?.getReader()
-      if (!reader) {
-        throw new Error('No response stream available')
-      }
+      const { jobId } = await uploadRes.json() as { jobId: string }
+      if (!jobId) throw new Error(t().errors.unexpectedFormat)
+      console.log('[SpikeLab Client] Job started:', jobId)
 
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let resultReceived = false
+      // Step 2: Poll for results (each request is fast, no proxy timeout)
+      const POLL_INTERVAL = 2000 // 2 seconds
+      let attempts = 0
+      const MAX_ATTEMPTS = 90 // 3 minutes
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+      while (attempts < MAX_ATTEMPTS) {
+        await new Promise(r => setTimeout(r, POLL_INTERVAL))
+        attempts++
 
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || '' // Keep incomplete line in buffer
+        const statusRes = await fetch(`/api/analyze-status?jobId=${encodeURIComponent(jobId)}`, {
+          signal: controller.signal,
+        })
 
-        for (const line of lines) {
-          if (!line.trim()) continue
-          let event: Record<string, unknown>
-          try {
-            event = JSON.parse(line)
-          } catch {
-            // Not valid JSON — skip (could be a partial chunk)
-            console.warn('[SpikeLab Client] Skipped non-JSON line:', line.substring(0, 100))
-            continue
+        if (!statusRes.ok) {
+          console.warn(`[SpikeLab Client] Status poll ${attempts} failed: ${statusRes.status}`)
+          continue // Retry on transient error
+        }
+
+        const status = await statusRes.json() as {
+          status: string; step: string; message: string; percent: number;
+          analysis?: unknown; error?: string
+        }
+
+        console.log('[SpikeLab Client] Poll', attempts, ':', status.status, status.step, status.percent + '%')
+
+        // Update progress UI
+        if (status.message) setProgressMsg(status.message)
+        if (typeof status.percent === 'number') setProgressPct(status.percent)
+        if (status.step) setProgressStep(status.step)
+
+        if (status.status === 'done' && status.analysis) {
+          const analysisData = status.analysis as Record<string, unknown>
+          if (!analysisData?.scores || !analysisData?.phaseAnalysis) {
+            console.error('[SpikeLab Client] Invalid analysis data')
+            throw new Error(t().errors.unexpectedFormat)
           }
+          console.log('[SpikeLab Client] Analysis complete, switching tab')
+          setAnalysis(status.analysis as SpikeAnalysis)
+          setActiveTab('analysis')
+          return // Success!
+        }
 
-          console.log('[SpikeLab Client] Event:', event.type, event.step || '', event.message || '')
-
-          if (event.type === 'progress') {
-            setProgressStep((event.step as string) || '')
-            setProgressMsg((event.message as string) || '')
-            if (typeof event.percent === 'number') setProgressPct(event.percent)
-          } else if (event.type === 'result') {
-            resultReceived = true
-            const analysisData = event.analysis
-            if (!analysisData?.scores || !analysisData?.phaseAnalysis) {
-              console.error('[SpikeLab Client] Invalid analysis data in stream')
-              throw new Error(t().errors.unexpectedFormat)
-            }
-            console.log('[SpikeLab Client] Analysis result received, switching tab')
-            setAnalysis(analysisData as SpikeAnalysis)
-            setActiveTab('analysis')
-          } else if (event.type === 'error') {
-            throw new Error((event.message as string) || t().errors.somethingWentWrong)
-          }
+        if (status.status === 'error') {
+          throw new Error(status.error || t().errors.somethingWentWrong)
         }
       }
 
-      if (!resultReceived) {
-        console.error('[SpikeLab Client] Stream ended without result')
-        throw new Error(t().errors.somethingWentWrong)
-      }
+      throw new Error(t().errors.timeout)
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         console.error('[SpikeLab Client] Request timed out')
