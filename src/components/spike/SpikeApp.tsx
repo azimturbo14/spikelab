@@ -150,34 +150,33 @@ export default function SpikeApp() {
 
         for (const line of lines) {
           if (!line.trim()) continue
+          let event: Record<string, unknown>
           try {
-            const event = JSON.parse(line)
-            console.log('[SpikeLab Client] Event:', event.type, event.step || '', event.message || '')
+            event = JSON.parse(line)
+          } catch {
+            // Not valid JSON — skip (could be a partial chunk)
+            console.warn('[SpikeLab Client] Skipped non-JSON line:', line.substring(0, 100))
+            continue
+          }
 
-            if (event.type === 'progress') {
-              setProgressStep(event.step || '')
-              setProgressMsg(event.message || '')
-              if (typeof event.percent === 'number') setProgressPct(event.percent)
-            } else if (event.type === 'result') {
-              resultReceived = true
-              const analysisData = event.analysis
-              if (!analysisData?.scores || !analysisData?.phaseAnalysis) {
-                console.error('[SpikeLab Client] Invalid analysis data in stream')
-                throw new Error(t().errors.unexpectedFormat)
-              }
-              console.log('[SpikeLab Client] Analysis result received, switching tab')
-              setAnalysis(analysisData as SpikeAnalysis)
-              setActiveTab('analysis')
-            } else if (event.type === 'error') {
-              throw new Error(event.message || t().errors.somethingWentWrong)
+          console.log('[SpikeLab Client] Event:', event.type, event.step || '', event.message || '')
+
+          if (event.type === 'progress') {
+            setProgressStep((event.step as string) || '')
+            setProgressMsg((event.message as string) || '')
+            if (typeof event.percent === 'number') setProgressPct(event.percent)
+          } else if (event.type === 'result') {
+            resultReceived = true
+            const analysisData = event.analysis
+            if (!analysisData?.scores || !analysisData?.phaseAnalysis) {
+              console.error('[SpikeLab Client] Invalid analysis data in stream')
+              throw new Error(t().errors.unexpectedFormat)
             }
-          } catch (parseErr) {
-            if (parseErr instanceof Error && parseErr.message !== t().errors.unexpectedFormat && parseErr.message !== t().errors.somethingWentWrong) {
-              // JSON parse error for this line — skip it (could be partial)
-              console.warn('[SpikeLab Client] Skipped non-JSON line:', line.substring(0, 100))
-            } else {
-              throw parseErr
-            }
+            console.log('[SpikeLab Client] Analysis result received, switching tab')
+            setAnalysis(analysisData as SpikeAnalysis)
+            setActiveTab('analysis')
+          } else if (event.type === 'error') {
+            throw new Error((event.message as string) || t().errors.somethingWentWrong)
           }
         }
       }

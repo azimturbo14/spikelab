@@ -249,22 +249,17 @@ export async function POST(request: NextRequest) {
 
   // Create a streaming response to keep the connection alive
   const encoder = new TextEncoder()
-  let resolveStream: () => void = () => {}
+  let streamController: ReadableStreamDefaultController | null = null
   const stream = new ReadableStream({
     start(controller) {
-      resolveStream = () => {
-        try { controller.close() } catch { /* already closed */ }
-      }
-      // Expose a way to send events
-      ;(stream as unknown as { __controller: typeof controller }).__controller = controller
+      streamController = controller
     },
   })
 
   const send = (data: unknown) => {
     try {
-      const ctrl = (stream as unknown as { __controller?: ReadableStreamDefaultController }).__controller
-      if (ctrl) {
-        ctrl.enqueue(encoder.encode(JSON.stringify(data) + '\n'))
+      if (streamController) {
+        streamController.enqueue(encoder.encode(JSON.stringify(data) + '\n'))
       }
     } catch { /* stream may be closed */ }
   }
@@ -370,7 +365,7 @@ export async function POST(request: NextRequest) {
           await unlink(tempDir).catch(() => {})
         } catch { /* ignore cleanup errors */ }
       }
-      resolveStream()
+      try { streamController?.close() } catch { /* already closed */ }
     }
   })()
 
