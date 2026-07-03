@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execFile } from 'child_process'
-import { writeFile, unlink, readdir, mkdtemp } from 'fs/promises'
+import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
+import ZAI from 'z-ai-web-dev-sdk'
 import type { SpikeAnalysis, CheckpointScores } from '@/lib/spike-types'
 import { extractFrames } from '@/lib/extract-frames'
 
@@ -181,45 +182,35 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
   }
 }
 
-/** Run z-ai vision CLI with multiple image files */
-function runVisionCli(imagePaths: string[], prompt: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const args = ['vision', '-p', prompt]
-    for (const imgPath of imagePaths) {
-      args.push('-i', imgPath)
-    }
-    execFile('z-ai', args, { timeout: 90_000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error('[SpikeLab] CLI error:', stderr || error.message)
-        reject(new Error(stderr || error.message))
-        return
-      }
-      resolve(stdout)
-    })
-  })
+/** Cached ZAI instance to avoid re-initializing on every request */
+let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null
+async function getZai() {
+  if (!zaiInstance) zaiInstance = await ZAI.create()
+  return zaiInstance
 }
 
-/** Extract the actual LLM content string from CLI output */
-function extractContentFromCliOutput(stdout: string): string {
-  const jsonStart = stdout.indexOf('{"choices"')
-  if (jsonStart >= 0) {
-    try {
-      const cliResponse = JSON.parse(stdout.substring(jsonStart))
-      return cliResponse.choices?.[0]?.message?.content || ''
-    } catch { /* fall through */ }
+/** Run VLM analysis using SDK (max_tokens prevents truncation) */
+async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<string> {
+  const zai = await getZai()
+  const content: Array<{ type: string; image_url?: { url: string }; text?: string }> = [
+    { type: 'text', text: prompt },
+  ]
+  for (const imgPath of imagePaths) {
+    const buffer = await readFile(imgPath)
+    const base64 = buffer.toString('base64')
+    content.push({
+      type: 'image_url',
+      image_url: { url: `data:image/jpeg;base64,${base64}` },
+    })
   }
 
-  try {
-    const cliResponse = JSON.parse(stdout.trim())
-    return cliResponse.choices?.[0]?.message?.content || ''
-  } catch { /* fall through */ }
+  const response = await zai.chat.completions.createVision({
+    messages: [{ role: 'user', content }],
+    thinking: { type: 'disabled' },
+    max_tokens: 4096,
+  })
 
-  const match = stdout.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*[,\}]/s)
-  if (match) {
-    return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
-  }
-
-  return ''
+  return response.choices?.[0]?.message?.content || ''
 }
 
 export async function POST(request: NextRequest) {
@@ -261,13 +252,11 @@ export async function POST(request: NextRequest) {
 
     const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video. Pay special attention to the torso/spine position during the airborne phase.`
 
-    const stdout = await runVisionCli(framePaths, fullPrompt)
-    console.log(`[SpikeLab] CLI output received (${stdout.length} chars)`)
-
-    const rawContent = extractContentFromCliOutput(stdout)
+    const rawContent = await runVisionAnalysis(framePaths, fullPrompt)
+    console.log(`[SpikeLab] VLM response received (${rawContent.length} chars)`)
 
     if (!rawContent) {
-      console.error('[SpikeLab] Could not extract content from CLI. Output preview:', stdout.substring(0, 500))
+      console.error('[SpikeLab] Empty VLM response')
       return NextResponse.json(
         { error: 'AI analysis returned no content. Please try a clearer or shorter video.' },
         { status: 500 }
