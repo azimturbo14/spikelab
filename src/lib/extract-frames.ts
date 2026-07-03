@@ -1,4 +1,5 @@
 import { execFile } from 'child_process'
+import { statSync } from 'fs'
 import path from 'path'
 
 /**
@@ -10,12 +11,17 @@ import path from 'path'
  * 3. Find the densest cluster = the spike action
  * 4. Extract frames concentrated around that action window
  * 5. Fall back to even spacing if motion detection fails
+ *
+ * IMPORTANT: Frames are extracted SEQUENTIALLY (not in parallel)
+ * because the sandbox kills parallel ffmpeg processes.
  */
 
 interface MotionPoint {
   time: number
   score: number
 }
+
+const MIN_FRAME_SIZE = 1024 // 1KB minimum for a valid frame
 
 /** Get video duration via ffprobe */
 function getDuration(videoPath: string): Promise<number> {
@@ -146,7 +152,7 @@ function findActionWindow(points: MotionPoint[], duration: number, maxWindowSize
   }
 }
 
-/** Extract a single frame at a specific timestamp */
+/** Extract a single frame at a specific timestamp, with file validation */
 function extractSingleFrame(
   videoPath: string,
   outputPath: string,
@@ -160,10 +166,40 @@ function extractSingleFrame(
       '-q:v', '2',
       '-y',
       outputPath,
-    ], { timeout: 15_000 }, (err) => {
-      resolve(!err)
+    ], { timeout: 30_000 }, (err) => {
+      if (err) { resolve(false); return }
+      // Validate the file exists and has real content
+      try {
+        const stat = statSync(outputPath)
+        resolve(stat.size >= MIN_FRAME_SIZE)
+      } catch {
+        resolve(false)
+      }
     })
   })
+}
+
+/**
+ * Extract multiple frames SEQUENTIALLY.
+ * Parallel extraction causes the sandbox to kill ffmpeg processes.
+ */
+async function extractFramesSequential(
+  videoPath: string,
+  timestamps: number[],
+  outputDir: string,
+  logPrefix: string
+): Promise<string[]> {
+  const extractedPaths: string[] = []
+  for (let i = 0; i < timestamps.length; i++) {
+    const framePath = path.join(outputDir, `frame_${String(extractedPaths.length).padStart(2, '0')}.jpg`)
+    const success = await extractSingleFrame(videoPath, framePath, timestamps[i])
+    if (success) {
+      extractedPaths.push(framePath)
+    } else {
+      console.warn(`${logPrefix} Failed to extract frame at ${timestamps[i].toFixed(2)}s`)
+    }
+  }
+  return extractedPaths
 }
 
 /**
@@ -206,18 +242,7 @@ export async function extractFrames(
 
   console.log(`${logPrefix} Extracting ${count} frames at: ${timestamps.map(t => t.toFixed(2) + 's').join(', ')}`)
 
-  const results = await Promise.all(
-    timestamps.map(async (ts, i) => {
-      const framePath = path.join(outputDir, `frame_${String(i).padStart(2, '0')}.jpg`)
-      const success = await extractSingleFrame(videoPath, framePath, ts)
-      if (!success) {
-        console.warn(`${logPrefix} Failed to extract frame ${i} at ${ts.toFixed(2)}s`)
-      }
-      return success ? framePath : null
-    })
-  )
-
-  const extractedPaths = results.filter((p): p is string => p !== null)
+  const extractedPaths = await extractFramesSequential(videoPath, timestamps, outputDir, logPrefix)
 
   if (extractedPaths.length === 0) {
     console.warn(`${logPrefix} All motion-based extractions failed, falling back to even spacing`)
@@ -228,51 +253,30 @@ export async function extractFrames(
   return extractedPaths
 }
 
-/** Fallback: extract frames evenly spaced */
-function extractEvenly(
+/** Fallback: extract frames evenly spaced, SEQUENTIALLY */
+async function extractEvenly(
   videoPath: string,
   outputDir: string,
   count: number,
   duration: number,
-  _logPrefix: string
+  logPrefix: string
 ): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const startPct = 0.05
-    const endPct = 0.95
-    const interval = (endPct - startPct) / (count + 1)
+  const startPct = 0.05
+  const endPct = 0.95
+  const interval = (endPct - startPct) / (count + 1)
 
-    const framePaths: string[] = []
-    for (let i = 0; i < count; i++) {
-      const ts = (startPct + interval * (i + 1)) * duration
-      const framePath = path.join(outputDir, `frame_${String(i).padStart(2, '0')}.jpg`)
-      framePaths.push(framePath)
-    }
+  const timestamps: number[] = []
+  for (let i = 0; i < count; i++) {
+    timestamps.push((startPct + interval * (i + 1)) * duration)
+  }
 
-    let completed = 0
-    const extractedPaths: string[] = []
+  console.log(`${logPrefix} Fallback: extracting ${count} frames evenly spaced`)
 
-    framePaths.forEach((framePath, i) => {
-      const ts = (startPct + interval * (i + 1)) * duration
-      execFile('ffmpeg', [
-        '-ss', ts.toString(),
-        '-i', videoPath,
-        '-frames:v', '1',
-        '-q:v', '2',
-        '-y',
-        framePath,
-      ], { timeout: 15_000 }, (err) => {
-        if (!err) {
-          extractedPaths.push(framePath)
-        }
-        completed++
-        if (completed === framePaths.length) {
-          if (extractedPaths.length === 0) {
-            reject(new Error('Failed to extract any frames from video.'))
-          } else {
-            resolve(extractedPaths)
-          }
-        }
-      })
-    })
-  })
+  const extractedPaths = await extractFramesSequential(videoPath, timestamps, outputDir, logPrefix)
+
+  if (extractedPaths.length === 0) {
+    throw new Error('Failed to extract any frames from video.')
+  }
+
+  return extractedPaths
 }
