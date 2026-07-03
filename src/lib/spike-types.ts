@@ -13,6 +13,7 @@ export interface CheckpointScores {
   vertical_jump_conversion: number;
   hip_shoulder_rotation: number;
   body_position_air: number;
+  torso_angle_air: number;
   bow_and_arrow: number;
   arm_swing_speed: number;
   contact_point: number;
@@ -85,6 +86,7 @@ export const CHECKPOINT_LABELS: Record<keyof CheckpointScores, { label: string; 
   vertical_jump_conversion: { label: "Vertical Jump Conversion", phase: "Jump", description: "How efficiently is horizontal momentum converted to vertical height?" },
   hip_shoulder_rotation: { label: "Hip-Shoulder Rotation", phase: "Jump", description: "Is there proper hip-shoulder separation (torque) before hitting?" },
   body_position_air: { label: "Body Position in Air", phase: "Jump", description: "Is the body in a good athletic position at peak height?" },
+  torso_angle_air: { label: "Torso Angle (Airborne)", phase: "Jump", description: "Is the spine/arch and whip transition correct during the airborne phase?" },
   bow_and_arrow: { label: "Bow-and-Arrow Position", phase: "Contact", description: "Is the hitting arm in a proper loading position (elbow high, hand behind head)?" },
   arm_swing_speed: { label: "Arm Swing Speed", phase: "Contact", description: "How fast and explosive is the arm whip through the hitting zone?" },
   contact_point: { label: "Contact Point", phase: "Contact", description: "Is contact at full extension, slightly in front of the hitting shoulder?" },

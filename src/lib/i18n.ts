@@ -87,7 +87,7 @@ const en = {
   analysis: {
     emptyMsg: 'Upload and analyze a video first to see your results.',
     yourSpikeAnalysis: "Spike Analysis",
-    allCheckpoints: 'All 15 Checkpoints',
+    allCheckpoints: 'All 16 Checkpoints',
     topStrengths: 'Top Strengths',
     topWeaknesses: 'Top Weaknesses',
     generateBtn: 'Generate 4-Week Training Plan',
@@ -314,7 +314,7 @@ const ru: Translations = {
   analysis: {
     emptyMsg: 'Сначала загрузите и проанализируйте видео, чтобы увидеть результаты.',
     yourSpikeAnalysis: 'Анализ нападающего удара',
-    allCheckpoints: 'Все 15 показателей',
+    allCheckpoints: 'Все 16 показателей',
     topStrengths: 'Сильные стороны',
     topWeaknesses: 'Слабые стороны',
     generateBtn: 'Создать план на 4 недели',
@@ -511,7 +511,7 @@ const uz: Translations = {
   analysis: {
     emptyMsg: 'Natijalarni ko\'rish uchun avval video yuklang va tahlil qiling.',
     yourSpikeAnalysis: 'Hujum zarbasi tahlili',
-    allCheckpoints: 'Barcha 15 ko\'rsatkich',
+    allCheckpoints: 'Barcha 16 ko\'rsatkich',
     topStrengths: 'Kuchli tomonlar',
     topWeaknesses: 'Zaif tomonlar',
     generateBtn: '4 haftalik mashg\'ulat rejasi yaratish',

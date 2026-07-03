@@ -455,7 +455,7 @@ function AnalysisView({
   const { t } = useI18n()
 
   const overallAvg = Math.round(
-    Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 15
+    Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 16
   )
 
   const phases = [
