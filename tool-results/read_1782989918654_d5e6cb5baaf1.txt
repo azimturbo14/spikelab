@@ -1,0 +1,642 @@
+     1→'use client'
+     2→
+     3→import { useState, useCallback, useRef } from 'react'
+     4→import { motion, AnimatePresence } from 'framer-motion'
+     5→import {
+     6→  Zap, ChevronRight, ArrowRight, Video, Brain,
+     7→  Activity, Flame, Footprints, Dumbbell, RotateCcw, Youtube,
+     8→  ChevronDown, Package, Lightbulb, Target, AlertTriangle,
+     9→  Crosshair, TrendingDown, TrendingUp, Sparkles
+    10→} from 'lucide-react'
+    11→import { Button } from '@/components/ui/button'
+    12→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    13→import { Badge } from '@/components/ui/badge'
+    14→import {
+    15→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+    16→} from '@/components/ui/select'
+    17→import { Input } from '@/components/ui/input'
+    18→import { Label } from '@/components/ui/label'
+    19→import VideoUploader from './VideoUploader'
+    20→import SpikeVisualization, { type SpikeVisualizationProps } from './SpikeVisualization'
+    21→import LanguageToggle from './LanguageToggle'
+    22→import { useI18n } from '@/lib/i18n-store'
+    23→import {
+    24→  type SpikeAnalysis, type TrainingPlan, type PlayerProfile,
+    25→  type CheckpointScores, type PhaseAnalyses, CHECKPOINT_LABELS, POSITIONS, EXPERIENCE_LEVELS, getScoreColor,
+    26→} from '@/lib/spike-types'
+    27→
+    28→type TabState = 'upload' | 'analysis' | 'training'
+    29→type PhaseKey = 'approach' | 'jump' | 'contact' | 'followThrough'
+    30→
+    31→export default function SpikeApp() {
+    32→  const { t } = useI18n()
+    33→  const [activeTab, setActiveTab] = useState<TabState>('upload')
+    34→  const [videoFile, setVideoFile] = useState<File | null>(null)
+    35→  const [isAnalyzing, setIsAnalyzing] = useState(false)
+    36→  const [analysis, setAnalysis] = useState<SpikeAnalysis | null>(null)
+    37→  const [trainingPlan, setTrainingPlan] = useState<TrainingPlan | null>(null)
+    38→  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false)
+    39→  const [error, setError] = useState<string | null>(null)
+    40→  const [vizFrames, setVizFrames] = useState<Array<{index:number;phase:string;imageBase64:string;keypoints:Record<string,[number,number]|null>;measurements:{groundY:number|null;highestPointY:number|null;torsoAngleDeg:number|null;kneeAngleDeg:number|null;armAngleDeg:number|null}}> | null>(null)
+    41→  const [isVisualizing, setIsVisualizing] = useState(false)
+    42→  const videoFileRef = useRef<File | null>(null)
+    43→
+    44→  const [profile, setProfile] = useState<PlayerProfile>({
+    45→    name: '', position: 'Outside Hitter', experience: 'Intermediate (2-5 years)',
+    46→  })
+    47→
+    48→  const posLabels = t().positionLabels
+    49→  const expLabels = t().experienceLabels
+    50→
+    51→  const handleVideoReady = useCallback((file: File) => { setVideoFile(file); videoFileRef.current = file; setError(null) }, [])
+    52→
+    53→  const handleAnalyze = async () => {
+    54→    if (!videoFile) return
+    55→    setIsAnalyzing(true); setError(null); setAnalysis(null); setTrainingPlan(null)
+    56→    const controller = new AbortController()
+    57→    const timeoutId = setTimeout(() => controller.abort(), 180_000)
+    58→    try {
+    59→      const formData = new FormData()
+    60→      formData.append('video', videoFile)
+    61→      formData.append('name', profile.name)
+    62→      formData.append('position', profile.position)
+    63→      formData.append('experience', profile.experience)
+    64→      const res = await fetch('/api/analyze-spike', { method: 'POST', body: formData, signal: controller.signal })
+    65→      if (!res.ok) { let errMsg = t().errors.analysisFailed; try { const d = await res.json(); errMsg = d.error || errMsg } catch { } throw new Error(errMsg) }
+    66→      const data = await res.json()
+    67→      if (data.analysis) { setAnalysis(data.analysis); setActiveTab('analysis'); triggerVisualization() }
+    68→      else if (data.scores) { setAnalysis(data as unknown as SpikeAnalysis); setActiveTab('analysis'); triggerVisualization() }
+    69→      else throw new Error(t().errors.unexpectedFormat)
+    70→    } catch (err: unknown) {
+    71→      if (err instanceof DOMException && err.name === 'AbortError') setError(t().errors.timeout)
+    72→      else setError(err instanceof Error ? err.message : t().errors.somethingWentWrong)
+    73→    } finally { clearTimeout(timeoutId); setIsAnalyzing(false) }
+    74→  }
+    75→
+    76→  const triggerVisualization = async () => {
+    77→    const file = videoFileRef.current
+    78→    if (!file) return
+    79→    setIsVisualizing(true); setVizFrames(null)
+    80→    try {
+    81→      const fd = new FormData()
+    82→      fd.append('video', file)
+    83→      const res = await fetch('/api/visualize-spike', { method: 'POST', body: fd })
+    84→      if (!res.ok) return // silent fail — visualization is optional
+    85→      const data = await res.json()
+    86→      if (data.frames?.length) setVizFrames(data.frames)
+    87→    } catch { /* visualization is optional */ }
+    88→    finally { setIsVisualizing(false) }
+    89→  }
+    90→
+    91→  const handleGeneratePlan = async () => {
+    92→    if (!analysis) return; setIsGeneratingPlan(true)
+    93→    try {
+    94→      const res = await fetch('/api/generate-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ analysis, profile }) })
+    95→      if (!res.ok) { const d = await res.json(); throw new Error(d.error || t().errors.planFailed) }
+    96→      const data = await res.json(); setTrainingPlan(data.plan); setActiveTab('training')
+    97→    } catch (err: unknown) { setError(err instanceof Error ? err.message : t().errors.planGenerateFailed) }
+    98→    finally { setIsGeneratingPlan(false) }
+    99→  }
+   100→
+   101→  const handleReset = () => { setVideoFile(null); setAnalysis(null); setTrainingPlan(null); setError(null); setVizFrames(null); setActiveTab('upload'); videoFileRef.current = null }
+   102→  const canAnalyze = videoFile !== null && !isAnalyzing
+   103→
+   104→  return (
+   105→    <div className="min-h-screen flex flex-col">
+   106→
+   107→      {/* ═══ HEADER ══════════════════════════════════════════════ */}
+   108→      <header className="sticky top-0 z-50 bg-[#F8F7F4]/80 backdrop-blur-md">
+   109→        <div className="max-w-3xl mx-auto px-6 h-14 flex items-center justify-between">
+   110→          <div className="flex items-center gap-2">
+   111→            <div className="w-7 h-7 rounded-lg bg-[#E85D26] flex items-center justify-center">
+   112→              <Zap className="w-3.5 h-3.5 text-white" />
+   113→            </div>
+   114→            <span className="font-bold text-[15px] tracking-tight text-[#1A1A1A]">SpikeLab</span>
+   115→          </div>
+   116→          <LanguageToggle />
+   117→        </div>
+   118→      </header>
+   119→
+   120→      <main className="flex-1">
+   121→        <div className="max-w-3xl mx-auto px-6">
+   122→
+   123→          {/* ═══ HERO ══════════════════════════════════════════════ */}
+   124→          <div className="pt-10 sm:pt-14 pb-2">
+   125→            <motion.h1
+   126→              initial={{ opacity: 0, y: 12 }}
+   127→              animate={{ opacity: 1, y: 0 }}
+   128→              transition={{ duration: 0.5 }}
+   129→              className="text-2xl sm:text-4xl font-bold tracking-tight text-[#1A1A1A] leading-snug"
+   130→              style={{ fontFamily: 'var(--font-heading), system-ui, sans-serif' }}
+   131→            >
+   132→              {t().hero.title1} <span className="text-[#E85D26]">{t().hero.titleHighlight}</span>
+   133→            </motion.h1>
+   134→            <motion.p
+   135→              initial={{ opacity: 0, y: 8 }}
+   136→              animate={{ opacity: 1, y: 0 }}
+   137→              transition={{ duration: 0.5, delay: 0.08 }}
+   138→              className="mt-2 text-[15px] text-[#8C877F] leading-relaxed max-w-lg"
+   139→            >
+   140→              {t().hero.description}
+   141→            </motion.p>
+   142→          </div>
+   143→
+   144→          {/* ═══ TABS ══════════════════════════════════════════════ */}
+   145→          <div className="mt-6 mb-8">
+   146→            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabState)}>
+   147→              <TabsList className="inline-flex gap-6 bg-transparent border-b border-[#E8E5E0] rounded-none p-0 mb-6 h-auto w-auto">
+   148→                <TabsTrigger value="upload" style={{ borderRadius: '8px' }} className="gap-1.5 border-b-2 border-transparent data-[state=active]:border-[#E85D26] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-[13px]">
+   149→                  <Video className="w-3.5 h-3.5" /> {t().tabs.upload}
+   150→                </TabsTrigger>
+   151→                <TabsTrigger value="analysis" disabled={!analysis} style={{ borderRadius: '8px' }} className="gap-1.5 border-b-2 border-transparent data-[state=active]:border-[#E85D26] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-[13px]">
+   152→                  <Activity className="w-3.5 h-3.5" /> {t().tabs.analysis}
+   153→                </TabsTrigger>
+   154→                <TabsTrigger value="training" disabled={!trainingPlan} style={{ borderRadius: '8px' }} className="gap-1.5 border-b-2 border-transparent data-[state=active]:border-[#E85D26] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-[13px]">
+   155→                  <Dumbbell className="w-3.5 h-3.5" /> {t().tabs.training}
+   156→                </TabsTrigger>
+   157→              </TabsList>
+   158→
+   159→              {/* ─── UPLOAD ─── */}
+   160→              <TabsContent value="upload">
+   161→                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
+   162→                  <div className="flex flex-col sm:flex-row gap-3">
+   163→                    <div className="flex-1">
+   164→                      <Label className="text-[11px] text-[#8C877F] mb-1 block">{t().upload.nameLabel}</Label>
+   165→                      <Input placeholder={t().upload.namePlaceholder} value={profile.name} onChange={(e) => setProfile(p => ({ ...p, name: e.target.value }))} />
+   166→                    </div>
+   167→                    <div className="sm:w-44">
+   168→                      <Label className="text-[11px] text-[#8C877F] mb-1 block">{t().upload.positionLabel}</Label>
+   169→                      <Select value={profile.position} onValueChange={(v) => setProfile(p => ({ ...p, position: v }))}>
+   170→                        <SelectTrigger><SelectValue /></SelectTrigger>
+   171→                        <SelectContent>{POSITIONS.map(pos => <SelectItem key={pos} value={pos}>{posLabels[pos as keyof typeof posLabels]}</SelectItem>)}</SelectContent>
+   172→                      </Select>
+   173→                    </div>
+   174→                    <div className="sm:w-52">
+   175→                      <Label className="text-[11px] text-[#8C877F] mb-1 block">{t().upload.experienceLabel}</Label>
+   176→                      <Select value={profile.experience} onValueChange={(v) => setProfile(p => ({ ...p, experience: v }))}>
+   177→                        <SelectTrigger><SelectValue /></SelectTrigger>
+   178→                        <SelectContent>{EXPERIENCE_LEVELS.map(lvl => <SelectItem key={lvl} value={lvl}>{expLabels[lvl as keyof typeof expLabels]}</SelectItem>)}</SelectContent>
+   179→                      </Select>
+   180→                    </div>
+   181→                  </div>
+   182→
+   183→                  <VideoUploader onVideoReady={handleVideoReady} isAnalyzing={isAnalyzing} disabled={isAnalyzing} />
+   184→
+   185→                  <p className="text-[13px] text-[#8C877F]">
+   186→                    <span className="text-[#B0AAA2]">Tip:</span> <span dangerouslySetInnerHTML={{ __html: t().upload.tip1 }} /> · <span dangerouslySetInnerHTML={{ __html: t().upload.tip2 }} />
+   187→                  </p>
+   188→
+   189→                  {error && (
+   190→                    <div className="flex items-start gap-2 text-[13px] text-[#DC2626] bg-red-50 rounded-xl px-4 py-3">
+   191→                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+   192→                      <p>{error}</p>
+   193→                    </div>
+   194→                  )}
+   195→
+   196→                  <div className="flex gap-3 pt-1">
+   197→                    <Button
+   198→                      size="lg"
+   199→                      disabled={!canAnalyze}
+   200→                      onClick={handleAnalyze}
+   201→                      className="gap-2 bg-[#E85D26] hover:bg-[#D14F1C] text-white rounded-xl h-11 px-7 shadow-sm disabled:opacity-40"
+   202→                    >
+   203→                      {isAnalyzing ? (
+   204→                        <><motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}><RotateCcw className="w-4 h-4" /></motion.div> {t().upload.analyzingBtn}</>
+   205→                      ) : (
+   206→                        <><Brain className="w-4 h-4" /> {t().upload.analyzeBtn}</>
+   207→                      )}
+   208→                    </Button>
+   209→                    {videoFile && !isAnalyzing && (
+   210→                      <Button variant="ghost" size="lg" onClick={handleReset} className="text-[#8C877F] hover:text-[#1A1A1A]">
+   211→                        {t().upload.resetBtn}
+   212→                      </Button>
+   213→                    )}
+   214→                  </div>
+   215→                </motion.div>
+   216→              </TabsContent>
+   217→
+   218→              {/* ─── ANALYSIS ─── */}
+   219→              <TabsContent value="analysis">
+   220→                {analysis ? (
+   221→                  <AnalysisView analysis={analysis} playerName={profile.name} onGeneratePlan={handleGeneratePlan} isGenerating={isGeneratingPlan} onReset={handleReset} vizFrames={vizFrames} isVisualizing={isVisualizing} />
+   222→                ) : (
+   223→                  <div className="py-16 text-center text-[#B0AAA2]"><Activity className="w-7 h-7 mx-auto mb-2" /><p className="text-sm">{t().analysis.emptyMsg}</p></div>
+   224→                )}
+   225→              </TabsContent>
+   226→
+   227→              {/* ─── TRAINING ─── */}
+   228→              <TabsContent value="training">
+   229→                {trainingPlan ? (
+   230→                  <TrainingPlanView plan={trainingPlan} onReset={handleReset} />
+   231→                ) : analysis ? (
+   232→                  <div className="py-16 text-center">
+   233→                    <Dumbbell className="w-7 h-7 mx-auto mb-2 text-[#E85D26]/30" />
+   234→                    <p className="text-sm text-[#8C877F] mb-5">{t().training.readyMsg}</p>
+   235→                    <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2 bg-[#E85D26] hover:bg-[#D14F1C] text-white rounded-xl h-11 px-7 shadow-sm">
+   236→                      {isGeneratingPlan ? <><motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}><RotateCcw className="w-4 h-4" /></motion.div> {t().training.generatingBtn}</> : <>{t().training.generateBtn} <ChevronRight className="w-4 h-4" /></>}
+   237→                    </Button>
+   238→                  </div>
+   239→                ) : (
+   240→                  <div className="py-16 text-center text-[#B0AAA2]"><Dumbbell className="w-7 h-7 mx-auto mb-2" /><p className="text-sm">{t().training.emptyMsg}</p></div>
+   241→                )}
+   242→              </TabsContent>
+   243→            </Tabs>
+   244→          </div>
+   245→        </div>
+   246→      </main>
+   247→
+   248→      {/* ═══ FOOTER ══════════════════════════════════════════════ */}
+   249→      <footer className="mt-auto border-t border-[#E8E5E0]">
+   250→        <div className="max-w-3xl mx-auto px-6 py-5 text-center">
+   251→          <p className="text-[11px] text-[#B0AAA2]">{t().footer.disclaimer}</p>
+   252→        </div>
+   253→      </footer>
+   254→    </div>
+   255→  )
+   256→}
+   257→
+   258→/* ═══════════════════════════════════════════════════════════════
+   259→   PERSONALIZED ANALYSIS VIEW
+   260→   Phases ordered by weakness. Per-checkpoint specific feedback.
+   261→   Priority callout. Fluid, non-blocky layout.
+   262→   ═══════════════════════════════════════════════════════════════ */
+   263→
+   264→const PHASE_META: Record<PhaseKey, { labelKey: keyof ReturnType<ReturnType<typeof useI18n>['t']>['analysis']; icon: typeof Activity; color: string }> = {
+   265→  approach: { labelKey: 'phaseApproach', icon: Footprints, color: '#E85D26' },
+   266→  jump: { labelKey: 'phaseJump', icon: Activity, color: '#D97706' },
+   267→  contact: { labelKey: 'phaseContact', icon: Flame, color: '#059669' },
+   268→  followThrough: { labelKey: 'phaseFollowThrough', icon: Sparkles, color: '#7C3AED' },
+   269→}
+   270→
+   271→const PHASE_CHECKPOINTS: Record<PhaseKey, (keyof CheckpointScores)[]> = {
+   272→  approach: ['approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm', 'arms_swing_back'],
+   273→  jump: ['vertical_jump_conversion', 'hip_shoulder_rotation', 'body_position_air', 'torso_angle_air'],
+   274→  contact: ['bow_and_arrow', 'arm_swing_speed', 'contact_point', 'wrist_snap', 'contact_height'],
+   275→  followThrough: ['follow_through', 'landing_balance'],
+   276→}
+   277→
+   278→const PHASE_LABEL_MAP: Record<PhaseKey, keyof ReturnType<ReturnType<typeof useI18n>['t']>['analysis']> = {
+   279→  approach: 'phaseLabelApproach',
+   280→  jump: 'phaseLabelJump',
+   281→  contact: 'phaseLabelContact',
+   282→  followThrough: 'phaseLabelFollowThrough',
+   283→}
+   284→
+   285→function getScoreLabelKey(score: number): keyof ReturnType<ReturnType<typeof useI18n>['t']>['scoreLabels'] {
+   286→  if (score >= 90) return 'elite'
+   287→  if (score >= 76) return 'excellent'
+   288→  if (score >= 60) return 'decent'
+   289→  if (score >= 40) return 'needsWork'
+   290→  return 'critical'
+   291→}
+   292→
+   293→function AnalysisView({ analysis, playerName, onGeneratePlan, isGenerating, onReset, vizFrames, isVisualizing }: {
+   294→  analysis: SpikeAnalysis; playerName: string; onGeneratePlan: () => void; isGenerating: boolean; onReset: () => void; vizFrames: SpikeVisualizationProps['frames'] | null; isVisualizing: boolean
+   295→}) {
+   296→  const { t } = useI18n()
+   297→  const tr = t()
+   298→  const overallAvg = Math.round(Object.values(analysis.scores).reduce((a, b) => a + b, 0) / 16)
+   299→  const cpLabels = tr.checkpoints
+   300→
+   301→  // Order phases by priority (weakest first)
+   302→  const orderedPhases = [...(analysis.priorityOrder || ['approach', 'contact', 'jump', 'followThrough'] as PhaseKey[])]
+   303→  const weakestPhase = orderedPhases[0]
+   304→  const weakestData = analysis.phaseAnalysis[weakestPhase]
+   305→
+   306→  return (
+   307→    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-10 pb-4">
+   308→
+   309→      {/* ── Top summary: score ring + meta ── */}
+   310→      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6 sm:gap-8">
+   311→        <div className="relative w-24 h-24 shrink-0">
+   312→          <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+   313→            <circle cx="60" cy="60" r="52" fill="none" className="score-ring-bg" strokeWidth="7" />
+   314→            <circle cx="60" cy="60" r="52" fill="none" stroke="#E85D26" strokeWidth="7" strokeLinecap="round" strokeDasharray={`${(overallAvg / 100) * 327} 327`} className="score-ring-fill" />
+   315→          </svg>
+   316→          <div className="absolute inset-0 flex flex-col items-center justify-center">
+   317→            <span className="text-[26px] font-bold text-[#1A1A1A] tabular-nums">{overallAvg}</span>
+   318→            <span className="text-[9px] text-[#B0AAA2]">{tr.analysis.scoreOutOf}</span>
+   319→          </div>
+   320→        </div>
+   321→
+   322→        <div className="flex-1 min-w-0">
+   323→          <h2 className="text-[17px] font-bold text-[#1A1A1A] leading-snug mb-1.5">
+   324→            {playerName ? `${playerName} — ` : ''}{tr.analysis.yourSpikeAnalysis}
+   325→          </h2>
+   326→          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+   327→            <span className="text-[#8C877F]">{tr.analysis.level}: <span className="font-semibold text-[#1A1A1A] capitalize">{analysis.estimatedLevel}</span></span>
+   328→            <span className="text-[#8C877F]">{tr.analysis.powerRating}: <span className={`font-semibold ${getScoreColor(analysis.overallPower)}`}>{analysis.overallPower}</span></span>
+   329→            <span className="text-[#8C877F]">{tr.analysis.approachSpeed}: <span className="font-semibold text-[#1A1A1A] capitalize">{analysis.estimatedApproachSpeed}</span></span>
+   330→          </div>
+   331→          <p className="text-[12px] text-[#B0AAA2] mt-1.5">YOLOv8 Pose Tracking · 16 checkpoints</p>
+   332→        </div>
+   333→      </div>
+   334→
+   335→      {/* ── #1 PRIORITY CALLOUT ── */}
+   336→      <PriorityCallout
+   337→        phaseKey={weakestPhase}
+   338→        score={weakestData.score}
+   339→        feedback={weakestData.feedback}
+   340→        specificFix={weakestData.specificFix}
+   341→      />
+   342→
+   343→      {/* ── FRAME-BY-FRAME VISUALIZATION ── */}
+   344→      {isVisualizing && (
+   345→        <div className="flex items-center gap-2 py-8 text-[13px] text-[#8C877F]">
+   346→          <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}><RotateCcw className="w-4 h-4" /></motion.div>
+   347→          Generating frame overlays...
+   348→        </div>
+   349→      )}
+   350→      {vizFrames && vizFrames.length > 0 && (
+   351→        <SpikeVisualization frames={vizFrames} playerName={playerName} />
+   352→      )}
+   353→
+   354→      {/* ── PHASES (weakest first) ── */}
+   355→      <div className="space-y-1">
+   356→        <p className="text-[10px] font-medium text-[#B0AAA2] uppercase tracking-widest mb-4">{tr.analysis.weakestFirst}</p>
+   357→
+   358→        {orderedPhases.map((phaseKey, idx) => {
+   359→          const phase = analysis.phaseAnalysis[phaseKey]
+   360→          const meta = PHASE_META[phaseKey]
+   361→          const Icon = meta.icon
+   362→          const checkpoints = PHASE_CHECKPOINTS[phaseKey]
+   363→          const isPriority = idx === 0
+   364→
+   365→          return (
+   366→            <div key={phaseKey} className="pt-6">
+   367→              {/* Phase header — inline, no box */}
+   368→              <div className="flex items-baseline gap-3 mb-2">
+   369→                <div className="flex items-center gap-2">
+   370→                  <Icon className="w-4 h-4" style={{ color: meta.color }} />
+   371→                  <span className="text-[14px] font-semibold text-[#1A1A1A]">
+   372→                    {tr.analysis[meta.labelKey]}
+   373→                  </span>
+   374→                  {isPriority && (
+   375→                    <span className="text-[10px] font-semibold text-[#E85D26] bg-[#FFF4EE] px-1.5 py-0.5 rounded-full">#1</span>
+   376→                  )}
+   377→                </div>
+   378→                <span className={`text-[20px] font-bold tabular-nums ${getScoreColor(phase.score)}`}>
+   379→                  {phase.score}
+   380→                </span>
+   381→              </div>
+   382→
+   383→              {/* Thin progress bar */}
+   384→              <div className={`progress-bar ${phase.score >= 76 ? 'progress-green' : phase.score >= 51 ? 'progress-amber' : 'progress-red'} mb-3`}>
+   385→                <div className="progress-bar-fill" style={{ width: `${phase.score}%` }} />
+   386→              </div>
+   387→
+   388→              {/* Phase observation — what we see */}
+   389→              <p className="text-[13px] text-[#5C5954] leading-relaxed mb-2">{phase.feedback}</p>
+   390→
+   391→              {/* Specific fix — highlighted */}
+   392→              {phase.specificFix && (
+   393→                <div className="flex items-start gap-2 py-2 px-3 rounded-lg bg-amber-50/60 border-l-2 border-amber-400 mb-4">
+   394→                  <Crosshair className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
+   395→                  <div>
+   396→                    <span className="text-[10px] font-semibold text-amber-700 uppercase tracking-wider">{tr.analysis.fixThis}</span>
+   397→                    <p className="text-[13px] text-amber-800 leading-relaxed mt-0.5">{phase.specificFix}</p>
+   398→                  </div>
+   399→                </div>
+   400→              )}
+   401→
+   402→              {/* Per-checkpoint detail rows */}
+   403→              <div className="space-y-0">
+   404→                {checkpoints.map((cpKey) => {
+   405→                  const score = analysis.scores[cpKey]
+   406→                  const label = cpLabels[cpKey as keyof typeof cpLabels] || cpKey
+   407→                  const feedback = analysis.checkpointFeedback?.[cpKey]
+   408→                  const isTorso = cpKey === 'torso_angle_air'
+   409→
+   410→                  return (
+   411→                    <div key={cpKey} className="group">
+   412→                      <div className="flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg hover:bg-white/70 transition-colors">
+   413→                        <div className="flex items-center gap-2 min-w-0 flex-1">
+   414→                          <span className="text-[13px] text-[#1A1A1A]/80">{label}</span>
+   415→                          {isTorso && (
+   416→                            <span className="text-[9px] font-medium text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-full shrink-0">
+   417→                              {tr.analysis.torsoAnalysis}
+   418→                            </span>
+   419→                          )}
+   420→                        </div>
+   421→                        <div className="flex items-center gap-2.5 shrink-0 ml-3">
+   422→                          <span className={`text-[13px] font-bold tabular-nums ${getScoreColor(score)}`}>{score}</span>
+   423→                          <span className={`text-[10px] ${getScoreColor(score)} opacity-50 w-12 text-right hidden sm:inline`}>
+   424→                            {tr.scoreLabels[getScoreLabelKey(score)]}
+   425→                          </span>
+   426→                        </div>
+   427→                      </div>
+   428→                      {/* Per-checkpoint specific feedback — shown inline below the row */}
+   429→                      {feedback && (
+   430→                        <p className="text-[12px] text-[#8C877F] leading-relaxed pl-5 pr-4 pb-2 -mt-1">{feedback}</p>
+   431→                      )}
+   432→                    </div>
+   433→                  )
+   434→                })}
+   435→              </div>
+   436→
+   437→              {/* Separator between phases (except last) */}
+   438→              {idx < orderedPhases.length - 1 && (
+   439→                <div className="mt-6 border-t border-[#E8E5E0]" />
+   440→              )}
+   441→            </div>
+   442→          )
+   443→        })}
+   444→      </div>
+   445→
+   446→      {/* ── STRENGTHS & WEAKNESSES ── */}
+   447→      <div className="grid sm:grid-cols-2 gap-6 sm:gap-10 pt-2">
+   448→        <div>
+   449→          <div className="flex items-center gap-1.5 mb-2.5">
+   450→            <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
+   451→            <h3 className="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider">{tr.analysis.strengthNote}</h3>
+   452→          </div>
+   453→          <ul className="space-y-2">
+   454→            {analysis.topStrengths.map((s, i) => (
+   455→              <li key={i} className="text-[13px] text-[#5C5954] leading-relaxed flex items-start gap-2">
+   456→                <span className="w-1 h-1 rounded-full bg-emerald-400 mt-2 shrink-0" />
+   457→                {s}
+   458→              </li>
+   459→            ))}
+   460→          </ul>
+   461→        </div>
+   462→        <div>
+   463→          <div className="flex items-center gap-1.5 mb-2.5">
+   464→            <TrendingDown className="w-3.5 h-3.5 text-amber-500" />
+   465→            <h3 className="text-[11px] font-semibold text-amber-600 uppercase tracking-wider">{tr.analysis.weaknessNote}</h3>
+   466→          </div>
+   467→          <ul className="space-y-2">
+   468→            {analysis.topWeaknesses.map((w, i) => (
+   469→              <li key={i} className="text-[13px] text-[#5C5954] leading-relaxed flex items-start gap-2">
+   470→                <span className="w-1 h-1 rounded-full bg-amber-400 mt-2 shrink-0" />
+   471→                {w}
+   472→              </li>
+   473→            ))}
+   474→          </ul>
+   475→        </div>
+   476→      </div>
+   477→
+   478→      {/* ── COACH NOTES ── */}
+   479→      <div className="pt-1">
+   480→        <div className="flex items-center gap-1.5 mb-2">
+   481→          <Lightbulb className="w-3.5 h-3.5 text-[#E85D26]" />
+   482→          <h3 className="text-[11px] font-semibold text-[#E85D26] uppercase tracking-wider">{tr.analysis.coachSays}</h3>
+   483→        </div>
+   484→        <p className="text-[13px] text-[#5C5954] leading-relaxed italic border-l-2 border-[#E85D26]/20 pl-4">{analysis.coachNotes}</p>
+   485→      </div>
+   486→
+   487→      {/* ── CTA ── */}
+   488→      <div className="flex gap-3 pt-2">
+   489→        <Button size="lg" onClick={onGeneratePlan} disabled={isGenerating} className="gap-2 bg-[#E85D26] hover:bg-[#D14F1C] text-white rounded-xl h-11 px-7 shadow-sm">
+   490→          {isGenerating ? <><motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}><RotateCcw className="w-4 h-4" /></motion.div> {tr.analysis.generatingBtn}</> : <>{tr.analysis.generateBtn} <ArrowRight className="w-4 h-4" /></>}
+   491→        </Button>
+   492→        <Button variant="ghost" size="lg" onClick={onReset} className="text-[#8C877F] hover:text-[#1A1A1A]">{tr.analysis.newAnalysisBtn}</Button>
+   493→      </div>
+   494→    </motion.div>
+   495→  )
+   496→}
+   497→
+   498→/* ═══ PRIORITY CALLOUT — the most prominent section ═══ */
+   499→
+   500→function PriorityCallout({ phaseKey, score, feedback, specificFix }: {
+   501→  phaseKey: PhaseKey; score: number; feedback: string; specificFix: string
+   502→}) {
+   503→  const { t } = useI18n()
+   504→  const tr = t()
+   505→  const meta = PHASE_META[phaseKey]
+   506→  const Icon = meta.icon
+   507→  const phaseName = tr.analysis[meta.labelKey]
+   508→
+   509→  return (
+   510→    <motion.div
+   511→      initial={{ opacity: 0, y: 8 }}
+   512→      animate={{ opacity: 1, y: 0 }}
+   513→      transition={{ duration: 0.4, delay: 0.2 }}
+   514→      className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#FFF7ED] to-[#FEF3E2] border border-[#E85D26]/15 p-5 sm:p-6"
+   515→    >
+   516→      {/* Decorative accent */}
+   517→      <div className="absolute top-0 right-0 w-32 h-32 bg-[#E85D26]/[0.04] rounded-full -translate-y-1/2 translate-x-1/2" />
+   518→
+   519→      <div className="relative">
+   520→        <div className="flex items-center gap-2 mb-2">
+   521→          <div className="w-6 h-6 rounded-md bg-[#E85D26] flex items-center justify-center">
+   522→            <Icon className="w-3.5 h-3.5 text-white" />
+   523→          </div>
+   524→          <span className="text-[11px] font-semibold text-[#E85D26] uppercase tracking-wider">{tr.analysis.priorityFix}</span>
+   525→          <span className="text-[11px] text-[#B0AAA2]">— {phaseName}</span>
+   526→          <span className={`ml-auto text-[18px] font-bold tabular-nums ${getScoreColor(score)}`}>{score}</span>
+   527→        </div>
+   528→
+   529→        <p className="text-[13px] text-[#5C5954] leading-relaxed mb-3">{feedback}</p>
+   530→
+   531→        {specificFix && (
+   532→          <div className="flex items-start gap-2 bg-white/60 rounded-lg px-3.5 py-2.5">
+   533→            <Crosshair className="w-4 h-4 text-[#E85D26] mt-0.5 shrink-0" />
+   534→            <div>
+   535→              <span className="text-[10px] font-semibold text-[#E85D26] uppercase tracking-wider">{tr.analysis.fixThis}</span>
+   536→              <p className="text-[13px] text-[#1A1A1A]/80 leading-relaxed mt-0.5 font-medium">{specificFix}</p>
+   537→            </div>
+   538→          </div>
+   539→        )}
+   540→
+   541→        <p className="text-[11px] text-[#B0AAA2] mt-2.5">{tr.analysis.priorityFixDesc}</p>
+   542→      </div>
+   543→    </motion.div>
+   544→  )
+   545→}
+   546→
+   547→/* ═══ TRAINING PLAN VIEW ═══════════════════════════════════════ */
+   548→
+   549→function TrainingPlanView({ plan, onReset }: { plan: TrainingPlan; onReset: () => void }) {
+   550→  const { t } = useI18n()
+   551→  const [openVideo, setOpenVideo] = useState<string | null>(null)
+   552→
+   553→  function getYouTubeId(url: string): string | null {
+   554→    const m = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
+   555→    return m ? m[1] : null
+   556→  }
+   557→
+   558→  return (
+   559→    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+   560→      <div>
+   561→        <h2 className="text-lg font-bold text-[#1A1A1A] mb-1">{t().training.title}</h2>
+   562→        <p className="text-[13px] text-[#8C877F] leading-relaxed mb-3">{plan.summary}</p>
+   563→        <div className="flex flex-wrap gap-1.5">
+   564→          {plan.keyFocus.map(f => <Badge key={f} className="bg-[#FFF4EE] text-[#E85D26] border-[#E85D26]/10 text-xs gap-1"><Target className="w-3 h-3" />{f}</Badge>)}
+   565→        </div>
+   566→      </div>
+   567→
+   568→      <AnimatePresence>
+   569→        {plan.weeks.map((week) => (
+   570→          <motion.div key={week.week} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: week.week * 0.05 }}>
+   571→            <div className="flex items-center gap-3 mb-3">
+   572→              <span className="text-[11px] font-bold text-[#E85D26] uppercase tracking-wider">{t().training.week} {week.week}</span>
+   573→              <div className="flex-1 h-px bg-[#E8E5E0]" />
+   574→              <span className="text-[12px] text-[#B0AAA2]">{week.title}</span>
+   575→            </div>
+   576→            <p className="text-[13px] text-[#8C877F] mb-3">{week.focus}</p>
+   577→            <div className="space-y-1 ml-0 sm:ml-3">
+   578→              {week.days.map((day) => (
+   579→                <div key={day.day}>
+   580→                  <div className="flex items-center gap-2 mb-1.5 mt-3">
+   581→                    <span className="text-[12px] font-medium text-[#1A1A1A]/60">{day.day}</span>
+   582→                    <span className="text-[10px] text-[#B0AAA2] uppercase">{day.phase}</span>
+   583→                  </div>
+   584→                  <div className="space-y-0.5">
+   585→                    {day.drills.map((drill, i) => {
+   586→                      const videoId = drill.videoUrl ? getYouTubeId(drill.videoUrl) : null
+   587→                      const drillKey = `${week.week}-${day.day}-${i}`
+   588→                      const isOpen = openVideo === drillKey
+   589→                      const needsEquipment = drill.equipment && drill.equipment !== 'None'
+   590→                      return (
+   591→                        <div key={i}>
+   592→                          <div className="flex items-start justify-between gap-3 py-2 px-2 rounded-lg hover:bg-white/60 transition-colors">
+   593→                            <div className="flex-1 min-w-0">
+   594→                              <div className="flex items-center gap-2 flex-wrap">
+   595→                                <span className="text-[13px] text-[#1A1A1A]/80">{drill.name}</span>
+   596→                                {needsEquipment && (
+   597→                                  <span className="text-[10px] text-[#B8792E] bg-amber-50 px-1.5 py-0.5 rounded font-medium">
+   598→                                    <Package className="w-2.5 h-2.5 inline -mt-px mr-0.5" />{drill.equipment}
+   599→                                  </span>
+   600→                                )}
+   601→                                {videoId && (
+   602→                                  <button onClick={() => setOpenVideo(p => p === drillKey ? null : drillKey)} className="text-[11px] text-red-500/70 hover:text-red-500 transition-colors inline-flex items-center gap-0.5">
+   603→                                    <Youtube className="w-3 h-3" /> {isOpen ? t().training.hide : t().training.watch} <ChevronDown className={`w-2.5 h-2.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+   604→                                  </button>
+   605→                                )}
+   606→                              </div>
+   607→                              {drill.cue && <p className="text-[11px] text-[#B0AAA2] mt-0.5 italic">&quot;{drill.cue}&quot;</p>}
+   608→                              {needsEquipment && drill.noEquipmentAlt && (
+   609→                                <p className="text-[11px] text-emerald-600/70 mt-1 leading-relaxed">
+   610→                                  <Lightbulb className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
+   611→                                  <span className="font-medium text-emerald-600">{t().training.noEquipment}</span> {drill.noEquipmentAlt}
+   612→                                </p>
+   613→                              )}
+   614→                            </div>
+   615→                            <div className="text-right shrink-0">
+   616→                              <p className="text-[12px] font-medium text-[#1A1A1A]/40 tabular-nums">{drill.sets}×{drill.reps}</p>
+   617→                            </div>
+   618→                          </div>
+   619→                          <AnimatePresence>
+   620→                            {isOpen && videoId && (
+   621→                              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+   622→                                <div className="mt-1 ml-2 rounded-xl overflow-hidden"><iframe className="w-full aspect-video" src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1&start=${drill.videoStart || 0}`} title={drill.name} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen /></div>
+   623→                              </motion.div>
+   624→                            )}
+   625→                          </AnimatePresence>
+   626→                        </div>
+   627→                      )
+   628→                    })}
+   629→                  </div>
+   630→                </div>
+   631→              ))}
+   632→            </div>
+   633→          </motion.div>
+   634→        ))}
+   635→      </AnimatePresence>
+   636→
+   637→      <div className="pt-2">
+   638→        <Button variant="ghost" onClick={onReset} className="gap-2 text-[#8C877F] hover:text-[#1A1A1A]"><RotateCcw className="w-4 h-4" /> {t().training.startOver}</Button>
+   639→      </div>
+   640→    </motion.div>
+   641→  )
+   642→}
