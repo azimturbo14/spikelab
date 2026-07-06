@@ -3,35 +3,25 @@
 import { useState, useCallback, useEffect, Component, type ReactNode, type ErrorInfo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Zap, Target, TrendingUp, ShieldCheck, Play, ChevronRight,
-  CheckCircle2, AlertTriangle, ArrowRight, Video, Brain,
-  Activity, Flame, Footprints, Dumbbell, RotateCcw, Youtube,
-  ChevronDown, Package, Lightbulb
+  Zap, Target, TrendingUp, Video, Brain,
+  Activity, Dumbbell, CheckCircle2, AlertTriangle,
+  RotateCcw, ChevronRight, Upload, ArrowRight
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
-} from '@/components/ui/select'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import { Skeleton } from '@/components/ui/skeleton'
 import VideoUploader from './VideoUploader'
+import PlayerProfileForm from './PlayerProfileForm'
+import AnalysisView from './AnalysisView'
+import TrainingPlanView from './TrainingPlanView'
 import LanguageToggle from './LanguageToggle'
+import ThemeToggle from './ThemeToggle'
 import {
   type SpikeAnalysis,
   type TrainingPlan,
   type PlayerProfile,
-  type CheckpointScores,
-  CHECKPOINT_LABELS,
-  POSITIONS,
-  EXPERIENCE_LEVELS,
-  getScoreColor,
-  getScoreBgColor,
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
 
@@ -65,6 +55,14 @@ class AnalysisErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
   }
 }
 
+/* ─── Step indicator for stepper tabs ───────────────────────── */
+const STEP_ICONS: Record<TabState, typeof Video> = {
+  upload: Video,
+  analysis: Activity,
+  training: Dumbbell,
+}
+
+/* ─── Main App ──────────────────────────────────────────────── */
 export default function SpikeApp() {
   const { t } = useI18n()
   const [mounted, setMounted] = useState(false)
@@ -80,6 +78,7 @@ export default function SpikeApp() {
   const [progressStep, setProgressStep] = useState('')
   const [progressMsg, setProgressMsg] = useState('')
   const [progressPct, setProgressPct] = useState(0)
+  const [showProfile, setShowProfile] = useState(false)
 
   const [profile, setProfile] = useState<PlayerProfile>({
     name: '',
@@ -90,6 +89,18 @@ export default function SpikeApp() {
   const handleVideoReady = useCallback((file: File) => {
     setVideoFile(file)
     setError(null)
+  }, [])
+
+  const handleSampleVideo = useCallback(async () => {
+    try {
+      const res = await fetch('/test-spike.mp4')
+      const blob = await res.blob()
+      const file = new File([blob], 'sample-spike.mp4', { type: 'video/mp4' })
+      setVideoFile(file)
+      setError(null)
+    } catch {
+      console.error('[SpikeLab] Failed to load sample video')
+    }
   }, [])
 
   const handleAnalyze = async () => {
@@ -103,10 +114,9 @@ export default function SpikeApp() {
     setProgressPct(0)
 
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 300_000) // 5 min total timeout
+    const timeoutId = setTimeout(() => controller.abort(), 300_000)
 
     try {
-      // Step 1: Upload video and get a jobId (fast response, no proxy timeout)
       const formData = new FormData()
       formData.append('video', videoFile)
       formData.append('name', profile.name)
@@ -134,10 +144,9 @@ export default function SpikeApp() {
       if (!jobId) throw new Error(t().errors.unexpectedFormat)
       console.log('[SpikeLab Client] Job started:', jobId)
 
-      // Step 2: Poll for results (each request is fast, no proxy timeout)
-      const POLL_INTERVAL = 2000 // 2 seconds
+      const POLL_INTERVAL = 2000
       let attempts = 0
-      const MAX_ATTEMPTS = 90 // 3 minutes
+      const MAX_ATTEMPTS = 90
 
       while (attempts < MAX_ATTEMPTS) {
         await new Promise(r => setTimeout(r, POLL_INTERVAL))
@@ -149,7 +158,7 @@ export default function SpikeApp() {
 
         if (!statusRes.ok) {
           console.warn(`[SpikeLab Client] Status poll ${attempts} failed: ${statusRes.status}`)
-          continue // Retry on transient error
+          continue
         }
 
         const status = await statusRes.json() as {
@@ -159,7 +168,6 @@ export default function SpikeApp() {
 
         console.log('[SpikeLab Client] Poll', attempts, ':', status.status, status.step, status.percent + '%')
 
-        // Update progress UI
         if (status.message) setProgressMsg(status.message)
         if (typeof status.percent === 'number') setProgressPct(status.percent)
         if (status.step) setProgressStep(status.step)
@@ -173,7 +181,7 @@ export default function SpikeApp() {
           console.log('[SpikeLab Client] Analysis complete, switching tab')
           setAnalysis(status.analysis as SpikeAnalysis)
           setActiveTab('analysis')
-          return // Success!
+          return
         }
 
         if (status.status === 'error') {
@@ -232,9 +240,17 @@ export default function SpikeApp() {
     setTrainingPlan(null)
     setError(null)
     setActiveTab('upload')
+    setShowProfile(false)
   }
 
   const canAnalyze = videoFile !== null && !isAnalyzing
+
+  // Step completion state
+  const steps: { key: TabState; label: string; completed: boolean; active: boolean }[] = [
+    { key: 'upload', label: t().stepperUpload, completed: !!analysis, active: activeTab === 'upload' },
+    { key: 'analysis', label: t().stepperAnalysis, completed: !!trainingPlan, active: activeTab === 'analysis' },
+    { key: 'training', label: t().stepperTraining, completed: false, active: activeTab === 'training' },
+  ]
 
   if (!mounted) {
     return (
@@ -248,9 +264,6 @@ export default function SpikeApp() {
       </div>
     )
   }
-
-  const positionLabels = t().positionLabels
-  const experienceLabels = t().experienceLabels
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -266,13 +279,16 @@ export default function SpikeApp() {
               <span className="hidden sm:inline text-xs text-muted-foreground ml-2 uppercase tracking-widest">{t().header.subtitle}</span>
             </div>
           </div>
-          <nav className="hidden md:flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={() => {
-              const el = document.getElementById('upload-section')
-              el?.scrollIntoView({ behavior: 'smooth' })
-            }}>{t().header.nav.analyze}</Button>
+          <div className="flex items-center gap-2">
+            <nav className="hidden md:flex items-center gap-1">
+              <Button variant="ghost" size="sm" onClick={() => {
+                const el = document.getElementById('upload-section')
+                el?.scrollIntoView({ behavior: 'smooth' })
+              }}>{t().header.nav.analyze}</Button>
+            </nav>
             <LanguageToggle />
-          </nav>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
@@ -309,581 +325,291 @@ export default function SpikeApp() {
               className="flex flex-wrap justify-center gap-3 text-sm text-muted-foreground"
             >
               <span className="flex items-center gap-1.5">
-                <Brain className="w-4 h-4 text-orange-500" /> {t().hero.pill1}
+                <Brain className="w-4 h-4 text-primary" /> {t().hero.pill1}
               </span>
               <span className="flex items-center gap-1.5">
-                <Target className="w-4 h-4 text-orange-500" /> {t().hero.pill2}
+                <Target className="w-4 h-4 text-primary" /> {t().hero.pill2}
               </span>
               <span className="flex items-center gap-1.5">
-                <TrendingUp className="w-4 h-4 text-orange-500" /> {t().hero.pill3}
+                <TrendingUp className="w-4 h-4 text-primary" /> {t().hero.pill3}
               </span>
             </motion.div>
           </div>
         </section>
 
+        {/* How It Works — bridge section */}
+        <section className="border-y bg-muted/30">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-12">
+            <h2 className="text-center text-sm font-semibold text-muted-foreground uppercase tracking-widest mb-8">
+              {t().howItWorks.title}
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
+              {[
+                { num: '01', title: t().howItWorks.step1Title, desc: t().howItWorks.step1Desc, icon: Upload },
+                { num: '02', title: t().howItWorks.step2Title, desc: t().howItWorks.step2Desc, icon: Brain },
+                { num: '03', title: t().howItWorks.step3Title, desc: t().howItWorks.step3Desc, icon: Target },
+              ].map((step, i) => (
+                <motion.div
+                  key={step.num}
+                  initial={{ opacity: 0, y: 15 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: i * 0.1 }}
+                  className="text-center"
+                >
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 text-primary mb-3">
+                    <step.icon className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-bold text-primary/60 mb-1">{step.num}</p>
+                  <h3 className="font-semibold mb-1">{step.title}</h3>
+                  <p className="text-sm text-muted-foreground">{step.desc}</p>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* Main Tool */}
-        <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 pb-20">
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabState)}>
-            <TabsList className="grid w-full grid-cols-3 mb-8">
-              <TabsTrigger value="upload" className="gap-1.5" style={{ borderRadius: '6px' }}>
-                <Video className="w-4 h-4" /> {t().tabs.upload}
-              </TabsTrigger>
-              <TabsTrigger value="analysis" disabled={!analysis} className="gap-1.5" style={{ borderRadius: '6px' }}>
-                <Activity className="w-4 h-4" /> {t().tabs.analysis}
-              </TabsTrigger>
-              <TabsTrigger value="training" disabled={!trainingPlan} className="gap-1.5" style={{ borderRadius: '6px' }}>
-                <Dumbbell className="w-4 h-4" /> {t().tabs.training}
-              </TabsTrigger>
-            </TabsList>
-
-            {/* Tab 1: Upload */}
-            <TabsContent value="upload">
-              <Card>
-                <CardContent className="p-4 sm:p-6 space-y-6">
-                  {/* Player Profile - Minimal */}
-                  <div>
-                    <h3 className="font-semibold mb-1">{t().upload.profileTitle}</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      {t().upload.profileDesc}
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="player-name">{t().upload.nameLabel}</Label>
-                        <Input
-                          id="player-name"
-                          placeholder={t().upload.namePlaceholder}
-                          value={profile.name}
-                          onChange={(e) => setProfile(p => ({ ...p, name: e.target.value }))}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>{t().upload.positionLabel}</Label>
-                        <Select value={profile.position} onValueChange={(v) => setProfile(p => ({ ...p, position: v }))}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {POSITIONS.map(pos => (
-                              <SelectItem key={pos} value={pos}>{positionLabels[pos as keyof typeof positionLabels]}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>{t().upload.experienceLabel}</Label>
-                        <Select value={profile.experience} onValueChange={(v) => setProfile(p => ({ ...p, experience: v }))}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {EXPERIENCE_LEVELS.map(lvl => (
-                              <SelectItem key={lvl} value={lvl}>{experienceLabels[lvl as keyof typeof experienceLabels]}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Video Upload */}
-                  <div>
-                    <h3 className="font-semibold mb-1">{t().upload.videoTitle}</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      {t().upload.videoDesc}
-                    </p>
-                    <VideoUploader
-                      onVideoReady={handleVideoReady}
-                      isAnalyzing={isAnalyzing}
-                      disabled={isAnalyzing}
-                    />
-                  </div>
-
-                  {/* Video Tips */}
-                  <div className="bg-muted/50 rounded-xl p-4 space-y-2">
-                    <h4 className="font-medium text-sm flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-500" /> {t().upload.tipsTitle}
-                    </h4>
-                    <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-                      <li>{t().upload.tip1}</li>
-                      <li>{t().upload.tip2}</li>
-                      <li>{t().upload.tip3}</li>
-                      <li>{t().upload.tip4}</li>
-                    </ul>
-                  </div>
-
-                  {/* Error */}
-                  {error && (
-                    <div className="bg-destructive/10 text-destructive rounded-lg p-4 text-sm flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                      <div>
-                        <p className="font-medium">{t().upload.errorTitle}</p>
-                        <p className="text-destructive/80">{error}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Progress Bar during analysis */}
-                  {isAnalyzing && (
-                    <div className="space-y-2 pt-2">
-                      <Progress value={progressPct} className="h-2" />
-                      {progressMsg && (
-                        <p className="text-sm text-muted-foreground text-center animate-pulse">
-                          {progressMsg}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Action Buttons */}
-                  <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                    <Button
-                      size="lg"
-                      className="flex-1 gap-2"
-                      disabled={!canAnalyze}
-                      onClick={handleAnalyze}
+        <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
+          {/* Stepper Tabs */}
+          <div className="mb-8">
+            <div className="flex items-center justify-between">
+              {steps.map((step, i) => {
+                const Icon = STEP_ICONS[step.key]
+                const isClickable = step.key === 'upload' || (step.key === 'analysis' && analysis) || (step.key === 'training' && trainingPlan)
+                return (
+                  <div key={step.key} className="flex items-center flex-1">
+                    <button
+                      onClick={() => isClickable && setActiveTab(step.key)}
+                      disabled={!isClickable}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                        step.active
+                          ? 'bg-primary text-primary-foreground'
+                          : step.completed
+                            ? 'bg-primary/10 text-primary hover:bg-primary/15'
+                            : 'text-muted-foreground cursor-not-allowed'
+                      }`}
                     >
-                      {isAnalyzing ? (
-                        <>
-                          <motion.div
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </motion.div>
-                          {progressMsg || t().upload.analyzingBtn}
-                          {progressPct > 0 && (
-                            <span className="text-xs opacity-70">({progressPct}%)</span>
-                          )}
-                        </>
+                      {step.completed && !step.active ? (
+                        <CheckCircle2 className="w-4 h-4" />
                       ) : (
-                        <>
-                          <Brain className="w-4 h-4" /> {t().upload.analyzeBtn}
-                        </>
+                        <Icon className="w-4 h-4" />
                       )}
-                    </Button>
-                    {videoFile && !isAnalyzing && (
-                      <Button variant="outline" size="lg" onClick={handleReset}>
-                        {t().upload.resetBtn}
-                      </Button>
+                      <span className="hidden sm:inline">{step.label}</span>
+                      <span className="sm:hidden">{i + 1}</span>
+                    </button>
+                    {i < steps.length - 1 && (
+                      <div className={`flex-1 h-px mx-2 transition-colors ${
+                        step.completed ? 'bg-primary/30' : 'bg-border'
+                      }`} />
                     )}
                   </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+                )
+              })}
+            </div>
+          </div>
 
-            {/* Tab 2: Analysis */}
-            <TabsContent value="analysis">
-              {analysis ? (
-                <AnalysisErrorBoundary onError={(msg) => { setError(msg); setActiveTab('upload') }}>
-                  <AnalysisView
-                    analysis={analysis}
-                    playerName={profile.name}
-                    onGeneratePlan={handleGeneratePlan}
-                    isGenerating={isGeneratingPlan}
-                    onReset={handleReset}
+          {/* Tab Content */}
+          {activeTab === 'upload' && (
+            <Card>
+              <CardContent className="p-4 sm:p-6 space-y-6">
+                {/* Video Upload (primary) */}
+                <div>
+                  <h3 className="font-semibold mb-1">{t().upload.videoTitle}</h3>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {t().upload.videoDesc}
+                  </p>
+                  <VideoUploader
+                    onVideoReady={handleVideoReady}
+                    onSampleVideo={handleSampleVideo}
+                    isAnalyzing={isAnalyzing}
+                    disabled={isAnalyzing}
                   />
-                </AnalysisErrorBoundary>
-              ) : (
-                <Card className="p-8 text-center text-muted-foreground">
-                  <Activity className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                  <p>{t().analysis.emptyMsg}</p>
-                </Card>
-              )}
-            </TabsContent>
+                </div>
 
-            {/* Tab 3: Training Plan */}
-            <TabsContent value="training">
-              {trainingPlan ? (
-                <TrainingPlanView plan={trainingPlan} onReset={handleReset} />
-              ) : analysis ? (
-                <Card className="p-8 text-center">
-                  <Dumbbell className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-50" />
-                  <p className="text-muted-foreground mb-4">{t().training.readyMsg}</p>
-                  <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2">
-                    {isGeneratingPlan ? (
+                {/* Error */}
+                {error && (
+                  <div className="bg-destructive/10 text-destructive rounded-lg p-4 text-sm flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">{t().upload.errorTitle}</p>
+                      <p className="text-destructive/80">{error}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Progress Bar during analysis */}
+                {isAnalyzing && (
+                  <div className="space-y-2 pt-2">
+                    <Progress value={progressPct} className="h-2" />
+                    {progressMsg && (
+                      <p className="text-sm text-muted-foreground text-center animate-pulse">
+                        {progressMsg}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <Button
+                    size="lg"
+                    className="flex-1 gap-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+                    disabled={!canAnalyze}
+                    onClick={handleAnalyze}
+                  >
+                    {isAnalyzing ? (
                       <>
-                        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                        >
                           <RotateCcw className="w-4 h-4" />
                         </motion.div>
-                        {t().training.generatingBtn}
+                        {progressMsg || t().upload.analyzingBtn}
+                        {progressPct > 0 && (
+                          <span className="text-xs opacity-70">({progressPct}%)</span>
+                        )}
                       </>
                     ) : (
-                      <>{t().training.generateBtn} <ChevronRight className="w-4 h-4" /></>
+                      <>
+                        <Brain className="w-4 h-4" /> {t().upload.analyzeBtn}
+                      </>
                     )}
                   </Button>
-                </Card>
-              ) : (
-                <Card className="p-8 text-center text-muted-foreground">
-                  <Dumbbell className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                  <p>{t().training.emptyMsg}</p>
-                </Card>
-              )}
-            </TabsContent>
-          </Tabs>
+                  {videoFile && !isAnalyzing && (
+                    <Button variant="outline" size="lg" onClick={handleReset}>
+                      {t().upload.resetBtn}
+                    </Button>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Player Profile — progressive disclosure */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowProfile(!showProfile)}
+                    className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+                  >
+                    <ChevronRight className={`w-4 h-4 transition-transform ${showProfile ? 'rotate-90' : ''}`} />
+                    {t().upload.profileTitle}
+                    <span className="text-xs text-muted-foreground/60 font-normal">({t().upload.profileDesc.split('.')[0]})</span>
+                  </button>
+                  <AnimatePresence>
+                    {showProfile && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="pt-4">
+                          <PlayerProfileForm profile={profile} onChange={setProfile} />
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* Video Tips — redesigned with checkmark icons */}
+                <div className="border-l-2 border-primary/30 bg-primary/5 rounded-r-xl p-4 space-y-2.5">
+                  <h4 className="font-medium text-sm flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" /> {t().upload.tipsTitle}
+                  </h4>
+                  <ul className="text-sm text-muted-foreground space-y-2">
+                    {[t().upload.tip1, t().upload.tip2, t().upload.tip3, t().upload.tip4].map((tip, i) => (
+                      <li key={i} className="flex gap-2 items-start">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span>{tip}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {activeTab === 'analysis' && (
+            analysis ? (
+              <AnalysisErrorBoundary onError={(msg) => { setError(msg); setActiveTab('upload') }}>
+                <AnalysisView
+                  analysis={analysis}
+                  playerName={profile.name}
+                  onGeneratePlan={handleGeneratePlan}
+                  isGenerating={isGeneratingPlan}
+                  onReset={handleReset}
+                />
+              </AnalysisErrorBoundary>
+            ) : (
+              <Card className="p-10 text-center">
+                <Activity className="w-12 h-12 mx-auto mb-4 text-muted-foreground/30" />
+                <h3 className="font-semibold text-lg mb-2">{t().analysis.emptyTitle}</h3>
+                <p className="text-sm text-muted-foreground max-w-md mx-auto">{t().analysis.emptyMsg}</p>
+                <Button variant="outline" className="mt-6" onClick={() => setActiveTab('upload')}>
+                  <ArrowRight className="w-4 h-4 mr-2" />{t().stepperUpload}
+                </Button>
+              </Card>
+            )
+          )}
+
+          {activeTab === 'training' && (
+            trainingPlan ? (
+              <TrainingPlanView plan={trainingPlan} onReset={handleReset} />
+            ) : analysis ? (
+              <Card className="p-10 text-center">
+                <Dumbbell className="w-12 h-12 mx-auto mb-4 text-primary/50" />
+                <h3 className="font-semibold text-lg mb-2">{t().training.emptyTitle}</h3>
+                <p className="text-sm text-muted-foreground mb-6">{t().training.readyMsg}</p>
+                <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0">
+                  {isGeneratingPlan ? (
+                    <>
+                      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+                        <RotateCcw className="w-4 h-4" />
+                      </motion.div>
+                      {t().training.generatingBtn}
+                    </>
+                  ) : (
+                    <>{t().training.generateBtn} <ChevronRight className="w-4 h-4" /></>
+                  )}
+                </Button>
+              </Card>
+            ) : (
+              <Card className="p-10 text-center">
+                <Dumbbell className="w-12 h-12 mx-auto mb-4 text-muted-foreground/30" />
+                <h3 className="font-semibold text-lg mb-2">{t().training.emptyTitle}</h3>
+                <p className="text-sm text-muted-foreground max-w-md mx-auto">{t().training.emptyMsg}</p>
+                <Button variant="outline" className="mt-6" onClick={() => setActiveTab('analysis')}>
+                  <ArrowRight className="w-4 h-4 mr-2" />{t().stepperAnalysis}
+                </Button>
+              </Card>
+            )
+          )}
         </section>
       </main>
 
       {/* Footer */}
       <footer className="border-t py-8 mt-auto">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            <span className="font-medium text-foreground">SpikeLab</span>
-            <span>{t().footer.subtitle}</span>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 space-y-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
+                <Zap className="w-4 h-4 text-primary-foreground" />
+              </div>
+              <span className="font-semibold text-foreground">SpikeLab</span>
+              <Badge variant="secondary" className="text-[10px] font-normal ml-1">{t().footer.version}</Badge>
+            </div>
+            <p className="text-xs text-center sm:text-right max-w-md text-muted-foreground leading-relaxed">
+              {t().footer.tagline}
+            </p>
           </div>
-          <p className="text-xs text-center sm:text-right max-w-md">
+          <p className="text-xs text-center text-muted-foreground/70">
             {t().footer.disclaimer}
           </p>
         </div>
       </footer>
-    </div>
-  )
-}
-
-/* ─── Analysis View ──────────────────────────────────────────── */
-
-function AnalysisView({
-  analysis,
-  playerName,
-  onGeneratePlan,
-  isGenerating,
-  onReset,
-}: {
-  analysis: SpikeAnalysis
-  playerName: string
-  onGeneratePlan: () => void
-  isGenerating: boolean
-  onReset: () => void
-}) {
-  const { t } = useI18n()
-
-  const scoreValues = Object.values(analysis?.scores ?? {}).filter((v): v is number => typeof v === 'number')
-  const overallAvg = scoreValues.length > 0
-    ? Math.round(scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length)
-    : 0
-
-  const phases = [
-    { key: 'approach' as const, label: t().analysis.phaseApproach, labelKey: 'phaseLabelApproach' as const, icon: Footprints, color: 'text-blue-500' },
-    { key: 'jump' as const, label: t().analysis.phaseJump, labelKey: 'phaseLabelJump' as const, icon: Activity, color: 'text-violet-500' },
-    { key: 'contact' as const, label: t().analysis.phaseContact, labelKey: 'phaseLabelContact' as const, icon: Flame, color: 'text-orange-500' },
-    { key: 'followThrough' as const, label: t().analysis.phaseFollowThrough, labelKey: 'phaseLabelFollowThrough' as const, icon: ShieldCheck, color: 'text-emerald-500' },
-  ]
-
-  const phaseLabelMap: Record<string, string> = {
-    approach: t().analysis.phaseLabelApproach,
-    jump: t().analysis.phaseLabelJump,
-    contact: t().analysis.phaseLabelContact,
-    followThrough: t().analysis.phaseLabelFollowThrough,
-  }
-
-  function getScoreLabel(score: number): string {
-    if (score >= 90) return t().scoreLabels.elite
-    if (score >= 76) return t().scoreLabels.excellent
-    if (score >= 60) return t().scoreLabels.decent
-    if (score >= 40) return t().scoreLabels.needsWork
-    return t().scoreLabels.critical
-  }
-
-  const checkpoints = t().checkpoints
-
-  return (
-    <div className="space-y-6">
-      {/* Overall Score */}
-      <Card className="overflow-hidden">
-        <div className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
-          <div className="flex flex-col sm:flex-row items-center gap-6">
-            <div className="relative w-28 h-28 sm:w-32 sm:h-32">
-              <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
-                <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" className="text-muted/30" strokeWidth="8" />
-                <circle
-                  cx="60" cy="60" r="52" fill="none"
-                  stroke="currentColor" strokeWidth="8" strokeLinecap="round"
-                  strokeDasharray={`${(overallAvg / 100) * 327} 327`}
-                  className={getScoreColor(overallAvg)}
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-3xl font-bold">{overallAvg}</span>
-                <span className="text-xs text-muted-foreground">/ 100</span>
-              </div>
-            </div>
-            <div className="text-center sm:text-left flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <Badge variant="secondary">{analysis.estimatedLevel || 'intermediate'}</Badge>
-                <Badge variant="outline" className="text-xs font-normal">
-                  YOLOv8 Pose Tracking
-                </Badge>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold mb-1">
-                {playerName ? `${playerName}'s` : t().analysis.yourSpikeAnalysis}
-              </h2>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                {analysis.coachNotes || ''}
-              </p>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Phase Scores */}
-      <div className="grid sm:grid-cols-2 gap-4">
-        {phases.map(({ key, label, icon: Icon, color }) => {
-          const phase = analysis.phaseAnalysis?.[key]
-          if (!phase) return null
-          const score = typeof phase.score === 'number' ? phase.score : 50
-          return (
-            <Card key={key} className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Icon className={`w-5 h-5 ${color}`} />
-                  <h3 className="font-semibold">{label}</h3>
-                </div>
-                <span className={`text-2xl font-bold ${getScoreColor(score)}`}>{score}</span>
-              </div>
-              <Progress value={score} className="h-2 mb-3" />
-              <p className="text-sm text-muted-foreground">{phase.feedback || ''}</p>
-            </Card>
-          )
-        })}
-      </div>
-
-      {/* Detailed Checkpoint Scores */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">{t().analysis.allCheckpoints}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {(['approach', 'jump', 'contact', 'followThrough'] as const).map(phase => {
-            const scoresObj = analysis.scores ?? {}
-            const phaseCheckpoints = Object.entries(scoresObj)
-              .filter(([k, v]) => typeof v === 'number' && CHECKPOINT_LABELS[k as keyof typeof CHECKPOINT_LABELS]?.phase === phase)
-            const phaseLabel = phaseLabelMap[phase] || phase
-            if (phaseCheckpoints.length === 0) return null
-            return (
-              <div key={phase}>
-                <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                  {phaseLabel}
-                </h4>
-                <div className="grid sm:grid-cols-2 gap-2">
-                  {phaseCheckpoints.map(([key, score]) => {
-                    const label = checkpoints[key as keyof typeof checkpoints] ?? key
-                    return (
-                      <div key={key} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
-                        <span className="text-sm">{label}</span>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-sm font-semibold ${getScoreColor(score as number)}`}>{score}</span>
-                          <Badge variant="outline" className={`text-[10px] ${getScoreColor(score as number)}`}>
-                            {getScoreLabel(score as number)}
-                          </Badge>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )
-          })}
-        </CardContent>
-      </Card>
-
-      {/* Strengths & Weaknesses */}
-      <div className="grid sm:grid-cols-2 gap-4">
-        <Card className="p-5">
-          <h3 className="font-semibold mb-3 flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {t().analysis.topStrengths}
-          </h3>
-          <ul className="space-y-2">
-            {(analysis.topStrengths ?? []).map((s, i) => (
-              <li key={i} className="text-sm text-muted-foreground flex gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span>{s}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-        <Card className="p-5">
-          <h3 className="font-semibold mb-3 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-500" /> {t().analysis.topWeaknesses}
-          </h3>
-          <ul className="space-y-2">
-            {(analysis.topWeaknesses ?? []).map((w, i) => (
-              <li key={i} className="text-sm text-muted-foreground flex gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                <span>{w}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
-
-      {/* Actions */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <Button size="lg" className="flex-1 gap-2" onClick={onGeneratePlan} disabled={isGenerating}>
-          {isGenerating ? (
-            <>
-              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
-                <RotateCcw className="w-4 h-4" />
-              </motion.div>
-              {t().analysis.generatingBtn}
-            </>
-          ) : (
-            <>{t().analysis.generateBtn} <ArrowRight className="w-4 h-4" /></>
-          )}
-        </Button>
-        <Button variant="outline" size="lg" onClick={onReset}>
-          {t().analysis.newAnalysisBtn}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-/* ─── Training Plan View ─────────────────────────────────────── */
-
-function TrainingPlanView({
-  plan,
-  onReset,
-}: {
-  plan: TrainingPlan
-  onReset: () => void
-}) {
-  const { t } = useI18n()
-  const [openVideo, setOpenVideo] = useState<string | null>(null)
-
-  function getYouTubeId(url: string): string | null {
-    const match = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
-    return match ? match[1] : null
-  }
-
-  function toggleVideo(drillKey: string) {
-    setOpenVideo(prev => prev === drillKey ? null : drillKey)
-  }
-
-  return (
-    <div className="space-y-6">
-      <Card className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
-        <h2 className="text-xl sm:text-2xl font-bold mb-2">{t().training.title}</h2>
-        <p className="text-muted-foreground mb-4">{plan.summary}</p>
-        <div className="flex flex-wrap gap-2">
-          {plan.keyFocus.map(f => (
-            <Badge key={f} variant="secondary"><Target className="w-3 h-3 mr-1" />{f}</Badge>
-          ))}
-        </div>
-      </Card>
-
-      <AnimatePresence>
-        {plan.weeks.map((week) => (
-          <motion.div
-            key={week.week}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: week.week * 0.1 }}
-          >
-            <Card className="overflow-hidden">
-              <CardHeader className="bg-muted/30">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Badge variant="outline" className="mb-1">{t().training.week} {week.week}</Badge>
-                    <CardTitle className="text-lg">{week.title}</CardTitle>
-                  </div>
-                </div>
-                <p className="text-sm text-muted-foreground">{week.focus}</p>
-              </CardHeader>
-              <CardContent className="p-4">
-                <div className="space-y-3">
-                  {week.days.map((day) => (
-                    <div key={day.day} className="border rounded-lg p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="font-medium text-sm">{day.day}</h4>
-                        <Badge variant="secondary" className="text-xs">{day.phase}</Badge>
-                      </div>
-                      <div className="space-y-2">
-                        {day.drills.map((drill, i) => {
-                          const videoId = drill.videoUrl ? getYouTubeId(drill.videoUrl) : null
-                          const drillKey = `${week.week}-${day.day}-${i}`
-                          const isOpen = openVideo === drillKey
-                          const needsEquipment = drill.equipment && drill.equipment !== 'None'
-                          return (
-                            <div key={i} className="bg-muted/30 rounded-md p-2.5">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <p className="text-sm font-medium">{drill.name}</p>
-                                    {needsEquipment && (
-                                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
-                                        <Package className="w-3 h-3" />
-                                        {drill.equipment}
-                                      </span>
-                                    )}
-                                    {videoId && (
-                                      <button
-                                        onClick={() => toggleVideo(drillKey)}
-                                        className="inline-flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-400 transition-colors shrink-0"
-                                      >
-                                        <Youtube className="w-3.5 h-3.5" />
-                                        {isOpen ? t().training.hide : t().training.watch}
-                                        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                                      </button>
-                                    )}
-                                  </div>
-                                  {drill.cue && (
-                                    <p className="text-xs text-muted-foreground mt-0.5 italic">
-                                      &quot;{drill.cue}&quot;
-                                    </p>
-                                  )}
-                                  {needsEquipment && drill.noEquipmentAlt && (
-                                    <div className="mt-1.5 flex items-start gap-1.5 bg-emerald-500/5 border border-emerald-500/20 rounded-md px-2 py-1.5">
-                                      <Lightbulb className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
-                                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 leading-relaxed">
-                                        <span className="font-semibold">{t().training.noEquipment}</span> {drill.noEquipmentAlt}
-                                      </p>
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="text-right shrink-0">
-                                  <p className="text-xs font-medium">{drill.sets} × {drill.reps}</p>
-                                  {drill.duration && (
-                                    <p className="text-xs text-muted-foreground">{drill.duration}</p>
-                                  )}
-                                </div>
-                              </div>
-                              <AnimatePresence>
-                                {isOpen && videoId && (
-                                  <motion.div
-                                    initial={{ height: 0, opacity: 0 }}
-                                    animate={{ height: 'auto', opacity: 1 }}
-                                    exit={{ height: 0, opacity: 0 }}
-                                    transition={{ duration: 0.25, ease: 'easeInOut' }}
-                                    className="overflow-hidden"
-                                  >
-                                    <div className="mt-3 rounded-lg overflow-hidden border bg-black">
-                                      <iframe
-                                        className="w-full aspect-video"
-                                        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1&start=${drill.videoStart || 0}`}
-                                        title={`${drill.name} Tutorial`}
-                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                        allowFullScreen
-                                      />
-                                    </div>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-
-      <div className="flex justify-center pt-4">
-        <Button variant="outline" size="lg" onClick={onReset} className="gap-2">
-          <RotateCcw className="w-4 h-4" /> {t().training.startOver}
-        </Button>
-      </div>
     </div>
   )
 }

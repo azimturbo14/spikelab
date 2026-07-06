@@ -49,3 +49,30 @@ Stage Summary:
 - AnalysisErrorBoundary added for defensive rendering error catching
 - All 16 checkpoints, 4 phases, strengths/weaknesses render correctly
 - Progress bar shows real-time status during analysis
+---
+Task ID: 1-10
+Agent: main
+Task: Apply all 20 UI/UX critique fixes to SpikeLab
+
+Work Log:
+- Changed CSS primary from oklch(0.205 0 0) (black) to oklch(0.705 0.213 47.604) (orange) in both light and dark themes
+- Updated ring color to match new primary
+- Created ThemeToggle.tsx using useSyncExternalStore for hydration safety
+- Added ThemeProvider from next-themes to layout.tsx
+- Completely rewrote i18n.ts with all 3 languages (EN/RU/UZ): added howItWorks, stepper labels, sample video, empty states, print plan, version, tagline, analysisMethod
+- Replaced generic Upload icon with Volleyball icon in VideoUploader
+- Added "Try with sample video" button in upload zone
+- Extracted AnalysisView.tsx with animated score ring (Framer Motion useMotionValue), "AI Vision Analysis" badge (was YOLOv8), checkpoint tooltips via Tooltip component, teal/amber phase colors (was blue/violet)
+- Extracted TrainingPlanView.tsx with Accordion (week 1 expanded by default), Print Plan button
+- Extracted PlayerProfileForm.tsx as collapsible section below upload (progressive disclosure)
+- Rebuilt SpikeApp.tsx as orchestrator: stepper-style tabs with checkmark completion states, "How it Works" bridge section between hero and tool, orange gradient CTA button, tips with green checkmarks + left border accent, improved footer with tagline + version badge
+- Language toggle and theme toggle now visible on all screen sizes (was hidden on mobile)
+- All 20 critique fixes applied and browser-verified
+
+Stage Summary:
+- 5 new/rewritten component files: SpikeApp.tsx, AnalysisView.tsx, TrainingPlanView.tsx, PlayerProfileForm.tsx, VideoUploader.tsx, ThemeToggle.tsx
+- 2 modified foundation files: globals.css (primary color), i18n.ts (all 3 languages)
+- 1 modified layout: layout.tsx (ThemeProvider)
+- VLM-verified all 7 major visual changes on desktop and mobile
+- Dark mode confirmed working
+- Lint clean (only pre-existing keep-alive.js error)

@@ -50,5 +50,11 @@ test
 prompt
 
 server.log
+
 # Skills directory
 /skills/
+
+# Temp / tool artifacts
+critique-*.png
+tool-results/
+.zscripts/

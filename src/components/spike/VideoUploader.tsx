@@ -1,11 +1,12 @@
 'use client';
 
-import { Upload, X, Loader2, AlertCircle } from 'lucide-react';
+import { Upload, X, Loader2, AlertCircle, Volleyball } from 'lucide-react';
 import { useCallback, useState, useRef } from 'react';
 import { useI18n } from '@/lib/i18n-store';
 
 interface VideoUploaderProps {
   onVideoReady: (file: File) => void;
+  onSampleVideo: () => void;
   isAnalyzing: boolean;
   disabled: boolean;
 }
@@ -20,6 +21,7 @@ function formatFileSize(bytes: number): string {
 
 export default function VideoUploader({
   onVideoReady,
+  onSampleVideo,
   isAnalyzing,
   disabled,
 }: VideoUploaderProps) {
@@ -34,7 +36,6 @@ export default function VideoUploader({
     (file: File) => {
       setUploadError(null);
 
-      // Check by MIME type or by extension (mobile browsers sometimes report generic MIME)
       const isVideoByMime = file.type.startsWith('video/');
       const isVideoByExt = VIDEO_EXTENSIONS.test(file.name);
 
@@ -156,27 +157,27 @@ export default function VideoUploader({
                   ? 'border-primary bg-primary/5 cursor-pointer'
                   : disabled || isAnalyzing
                     ? 'border-muted-foreground/20 bg-muted/30 cursor-not-allowed'
-                    : 'border-muted-foreground/30 bg-muted/50 cursor-pointer hover:bg-muted/70 hover:border-muted-foreground/50'
+                    : 'border-muted-foreground/30 bg-muted/50 cursor-pointer hover:bg-muted/70 hover:border-primary/50'
           }
         `}
       >
         {!selectedFile ? (
           /* Upload prompt */
-          <div className="flex flex-col items-center justify-center gap-3 px-6 py-16">
+          <div className="flex flex-col items-center justify-center gap-3 px-6 py-12">
             <div
-              className={`rounded-full p-4 transition-colors duration-200 ${
+              className={`rounded-2xl p-4 transition-colors duration-200 ${
                 isDragOver
                   ? 'bg-primary/10 text-primary'
                   : disabled || isAnalyzing
                     ? 'bg-muted text-muted-foreground/50'
-                    : 'bg-muted text-muted-foreground'
+                    : 'bg-primary/10 text-primary'
               }`}
             >
-              <Upload className="h-8 w-8" />
+              <Volleyball className="h-10 w-10" />
             </div>
             <div className="text-center">
               <p
-                className={`text-base font-medium ${
+                className={`text-base font-semibold ${
                   disabled || isAnalyzing
                     ? 'text-muted-foreground/50'
                     : 'text-foreground'
@@ -197,6 +198,20 @@ export default function VideoUploader({
             <p className="text-xs text-muted-foreground/60">
               {t().uploader.formats}
             </p>
+
+            {/* Sample video button */}
+            {!disabled && !isAnalyzing && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSampleVideo();
+                }}
+                className="mt-1 text-xs font-medium text-primary hover:text-primary/80 underline underline-offset-2 transition-colors"
+              >
+                {t().upload.sampleVideo}
+              </button>
+            )}
           </div>
         ) : (
           /* Video preview */
