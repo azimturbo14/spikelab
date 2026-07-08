@@ -36,8 +36,39 @@ export interface PhaseAnalyses {
   followThrough: PhaseAnalysis;
 }
 
+export interface CheckpointConfidence {
+  approach_speed: number;
+  approach_angle: number;
+  last_step_length: number;
+  footwork_rhythm: number;
+  arms_swing_back: number;
+  vertical_jump_conversion: number;
+  hip_shoulder_rotation: number;
+  body_position_air: number;
+  torso_angle_air: number;
+  bow_and_arrow: number;
+  arm_swing_speed: number;
+  contact_point: number;
+  wrist_snap: number;
+  contact_height: number;
+  follow_through: number;
+  landing_balance: number;
+}
+
+export interface AnalysisMetadata {
+  frameCount?: number;
+  duration?: number;
+  resolution?: string;
+  isPortrait?: boolean;
+  cameraAngle?: string;
+  framesWithPlayer?: number;
+  quality?: 'high' | 'medium' | 'low';
+  averageConfidence?: number;
+}
+
 export interface SpikeAnalysis {
   scores: CheckpointScores;
+  confidence?: CheckpointConfidence;
   checkpointFeedback?: Record<string, string>;
   phaseAnalysis: PhaseAnalyses;
   topStrengths: string[];
@@ -47,6 +78,7 @@ export interface SpikeAnalysis {
   estimatedApproachSpeed: string;
   overallPower: number;
   priorityOrder?: string[];
+  metadata?: AnalysisMetadata;
 }
 
 export interface TrainingWeek {
@@ -80,23 +112,27 @@ export interface TrainingPlan {
   keyFocus: string[];
 }
 
-export const CHECKPOINT_LABELS: Record<keyof CheckpointScores, { label: string; phase: string; description: string }> = {
-  approach_speed: { label: "Approach Speed", phase: "Approach", description: "How fast and explosive is the approach run?" },
-  approach_angle: { label: "Approach Angle", phase: "Approach", description: "Is the approach angle optimal (45-60 degrees toward net)?" },
-  last_step_length: { label: "Last Step Length", phase: "Approach", description: "Is the braking step long enough to convert horizontal to vertical momentum?" },
-  footwork_rhythm: { label: "Footwork Rhythm", phase: "Approach", description: "Is the slow-to-fast rhythm correct in the 3 or 4-step approach?" },
-  arms_swing_back: { label: "Arms Swing Back on Plant", phase: "Approach", description: "Do both arms swing back during the plant to load elastic energy?" },
-  vertical_jump_conversion: { label: "Vertical Jump Conversion", phase: "Jump", description: "How efficiently is horizontal momentum converted to vertical height?" },
-  hip_shoulder_rotation: { label: "Hip-Shoulder Rotation", phase: "Jump", description: "Is there proper hip-shoulder separation (torque) before hitting?" },
-  body_position_air: { label: "Body Position in Air", phase: "Jump", description: "Is the body in a good athletic position at peak height?" },
-  torso_angle_air: { label: "Torso Angle (Airborne)", phase: "Jump", description: "Is the spine/arch and whip transition correct during the airborne phase?" },
-  bow_and_arrow: { label: "Bow-and-Arrow Position", phase: "Contact", description: "Is the hitting arm in a proper loading position (elbow high, hand behind head)?" },
-  arm_swing_speed: { label: "Arm Swing Speed", phase: "Contact", description: "How fast and explosive is the arm whip through the hitting zone?" },
-  contact_point: { label: "Contact Point", phase: "Contact", description: "Is contact at full extension, slightly in front of the hitting shoulder?" },
-  wrist_snap: { label: "Wrist Snap (Topspin)", phase: "Contact", description: "Is there a strong wrist snap over the ball for topspin?" },
-  contact_height: { label: "Contact Height", phase: "Contact", description: "How high is the contact point relative to the net?" },
-  follow_through: { label: "Follow-Through", phase: "Follow-Through", description: "Does the arm continue across the body after contact?" },
-  landing_balance: { label: "Landing Balance", phase: "Follow-Through", description: "Is the landing soft, two-footed, with knees bent?" },
+export const TEMPORAL_CHECKPOINTS = new Set<keyof CheckpointScores>([
+  'approach_speed', 'footwork_rhythm', 'arm_swing_speed', 'vertical_jump_conversion',
+])
+
+export const CHECKPOINT_LABELS: Record<keyof CheckpointScores, { label: string; phase: string; description: string; isTemporal: boolean }> = {
+  approach_speed: { label: "Approach Speed", phase: "Approach", description: "How fast and explosive is the approach run?", isTemporal: true },
+  approach_angle: { label: "Approach Angle", phase: "Approach", description: "Is the approach angle optimal (45-60 degrees toward net)?", isTemporal: false },
+  last_step_length: { label: "Last Step Length", phase: "Approach", description: "Is the braking step long enough to convert horizontal to vertical momentum?", isTemporal: false },
+  footwork_rhythm: { label: "Footwork Rhythm", phase: "Approach", description: "Is the slow-to-fast rhythm correct in the 3 or 4-step approach?", isTemporal: true },
+  arms_swing_back: { label: "Arms Swing Back on Plant", phase: "Approach", description: "Do both arms swing back during the plant to load elastic energy?", isTemporal: false },
+  vertical_jump_conversion: { label: "Vertical Jump Conversion", phase: "Jump", description: "How efficiently is horizontal momentum converted to vertical height?", isTemporal: true },
+  hip_shoulder_rotation: { label: "Hip-Shoulder Rotation", phase: "Jump", description: "Is there proper hip-shoulder separation (torque) before hitting?", isTemporal: false },
+  body_position_air: { label: "Body Position in Air", phase: "Jump", description: "Is the body in a good athletic position at peak height?", isTemporal: false },
+  torso_angle_air: { label: "Torso Angle (Airborne)", phase: "Jump", description: "Is the spine/arch and whip transition correct during the airborne phase?", isTemporal: false },
+  bow_and_arrow: { label: "Bow-and-Arrow Position", phase: "Contact", description: "Is the hitting arm in a proper loading position (elbow high, hand behind head)?", isTemporal: false },
+  arm_swing_speed: { label: "Arm Swing Speed", phase: "Contact", description: "How fast and explosive is the arm whip through the hitting zone?", isTemporal: true },
+  contact_point: { label: "Contact Point", phase: "Contact", description: "Is contact at full extension, slightly in front of the hitting shoulder?", isTemporal: false },
+  wrist_snap: { label: "Wrist Snap (Topspin)", phase: "Contact", description: "Is there a strong wrist snap over the ball for topspin?", isTemporal: false },
+  contact_height: { label: "Contact Height", phase: "Contact", description: "How high is the contact point relative to the net?", isTemporal: false },
+  follow_through: { label: "Follow-Through", phase: "Follow-Through", description: "Does the arm continue across the body after contact?", isTemporal: false },
+  landing_balance: { label: "Landing Balance", phase: "Follow-Through", description: "Is the landing soft, two-footed, with knees bent?", isTemporal: false },
 };
 
 export const POSITIONS = [
@@ -137,4 +173,10 @@ export function getScoreLabel(score: number): string {
 
 export function getPhaseFromCheckpoint(key: keyof CheckpointScores): string {
   return CHECKPOINT_LABELS[key].phase;
+}
+
+export function getConfidenceLabel(confidence: number): { label: string; color: string } {
+  if (confidence >= 51) return { label: 'High', color: 'text-emerald-600' }
+  if (confidence >= 26) return { label: 'Low', color: 'text-amber-600' }
+  return { label: 'Not Visible', color: 'text-muted-foreground' }
 }

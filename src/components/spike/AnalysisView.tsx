@@ -4,7 +4,8 @@ import { motion, useMotionValue, useTransform, animate } from 'framer-motion'
 import { useState, useEffect } from 'react'
 import {
   CheckCircle2, AlertTriangle, ArrowRight, Activity,
-  Footprints, Dumbbell, ShieldCheck, Flame, Target
+  Footprints, Dumbbell, ShieldCheck, Flame, Target,
+  Info, Clock, Eye, EyeOff
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +18,7 @@ import {
   type SpikeAnalysis,
   CHECKPOINT_LABELS,
   getScoreColor,
+  getConfidenceLabel,
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
 
@@ -81,10 +83,22 @@ export default function AnalysisView({
 }: AnalysisViewProps) {
   const { t } = useI18n()
 
-  const scoreValues = Object.values(analysis?.scores ?? {}).filter((v): v is number => typeof v === 'number')
-  const overallAvg = scoreValues.length > 0
-    ? Math.round(scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length)
-    : 0
+  const scoreKeys = Object.keys(CHECKPOINT_LABELS) as Array<keyof typeof CHECKPOINT_LABELS>
+  const conf = analysis.confidence
+  const meta = analysis.metadata
+
+  // When confidence data exists, average only high-confidence scores
+  const scoreEntries = scoreKeys.map(k => ({
+    key: k,
+    score: (analysis.scores as Record<string, number>)[k] ?? 0,
+    conf: conf ? (conf as Record<string, number>)[k] ?? 0 : 100,
+  }))
+  const highConfScores = scoreEntries.filter(e => e.conf >= 51).map(e => e.score)
+  const overallAvg = highConfScores.length > 0
+    ? Math.round(highConfScores.reduce((a, b) => a + b, 0) / highConfScores.length)
+    : scoreEntries.length > 0
+      ? Math.round(scoreEntries.reduce((a, b) => a + b.score, 0) / scoreEntries.length)
+      : 0
 
   const phases = [
     { key: 'approach' as const, label: t().analysis.phaseApproach, labelKey: 'phaseLabelApproach' as const, icon: Footprints, color: 'text-teal-500' },
@@ -137,6 +151,28 @@ export default function AnalysisView({
         </div>
       </Card>
 
+      {/* Analysis Quality Banner */}
+      {meta && (
+        <Card className="border-l-4 overflow-hidden"
+          style={{ borderLeftColor: meta.averageConfidence && meta.averageConfidence >= 60 ? '#10b981' : meta.averageConfidence && meta.averageConfidence >= 30 ? '#f59e0b' : '#ef4444' }}>
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <Eye className={`w-5 h-5 mt-0.5 shrink-0 ${meta.averageConfidence && meta.averageConfidence >= 60 ? 'text-emerald-500' : meta.averageConfidence && meta.averageConfidence >= 30 ? 'text-amber-500' : 'text-red-500'}`} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">
+                  {meta.averageConfidence && meta.averageConfidence >= 60 ? t().analysis.qualityHigh : meta.averageConfidence && meta.averageConfidence >= 30 ? t().analysis.qualityMedium : t().analysis.qualityLow}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {meta.frameCount && <span>{meta.frameCount} {t().analysis.framesExtracted}</span>}
+                  {meta.averageConfidence !== undefined && <span> · {t().analysis.avgConfidence}: {meta.averageConfidence}%</span>}
+                  {meta.framesWithPlayer !== undefined && <span> · {meta.framesWithPlayer}/{meta.frameCount} {t().analysis.framesWithPlayer}</span>}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Phase Scores */}
       <div className="grid sm:grid-cols-2 gap-4">
         {phases.map(({ key, label, icon: Icon, color }) => {
@@ -180,19 +216,49 @@ export default function AnalysisView({
                   {phaseCheckpoints.map(([key, score]) => {
                     const label = checkpoints[key as keyof typeof checkpoints] ?? key
                     const feedback = checkpointFeedback[key]
+                    const cpKey = key as keyof typeof CHECKPOINT_LABELS
+                    const cpLabel = CHECKPOINT_LABELS[cpKey]
+                    const confVal = conf ? (conf as Record<string, number>)[key] ?? 0 : 100
+                    const confInfo = getConfidenceLabel(confVal)
+                    const isNA = (score as number) === 0 && confVal === 0
+                    const isTemporal = cpLabel?.isTemporal ?? false
+                    const opacity = confVal < 26 ? 'opacity-40' : confVal < 51 ? 'opacity-60' : ''
+
                     const scoreEl = (
-                      <div className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
+                      <div className={`flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2 ${opacity}`}>
                         <span className="text-sm">{label}</span>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-sm font-semibold ${getScoreColor(score as number)}`}>{score}</span>
-                          <Badge variant="outline" className={`text-[10px] ${getScoreColor(score as number)}`}>
-                            {getScoreLabel(score as number)}
-                          </Badge>
+                        <div className="flex items-center gap-1.5">
+                          {isTemporal && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-[10px] gap-1 border-dashed">
+                                  <Clock className="w-2.5 h-2.5" />
+                                  {t().analysis.temporal}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" className="max-w-[200px] text-xs">
+                                {t().analysis.temporalTooltip}
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          {isNA ? (
+                            <span className="text-xs italic text-muted-foreground">N/A</span>
+                          ) : (
+                            <>
+                              <span className={`text-sm font-semibold ${getScoreColor(score as number)}`}>{score}</span>
+                              {conf && confVal < 51 && (
+                                <Badge variant="outline" className={`text-[9px] ${confInfo.color}`}>
+                                  {confVal < 26 ? <EyeOff className="w-2.5 h-2.5 mr-0.5" /> : null}
+                                  {confInfo.label}
+                                </Badge>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
                     )
 
-                    if (feedback) {
+                    if (feedback && !isNA) {
                       return (
                         <Tooltip key={key}>
                           <TooltipTrigger asChild>
@@ -242,6 +308,18 @@ export default function AnalysisView({
           </ul>
         </Card>
       </div>
+
+      {/* Methodology Disclosure */}
+      <Card className="p-4">
+        <div className="flex items-start gap-3">
+          <Info className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground/70">{t().analysis.methodologyTitle}</p>
+            <p>{t().analysis.methodologyDesc}</p>
+            {meta?.frameCount && <p>{meta.frameCount} {t().analysis.framesExtracted.toLowerCase()}. {t().analysis.methodologyTip}</p>}
+          </div>
+        </div>
+      </Card>
 
       {/* Actions */}
       <div className="flex flex-col sm:flex-row gap-3">

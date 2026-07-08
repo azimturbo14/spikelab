@@ -3,7 +3,7 @@ import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
 import ZAI from 'z-ai-web-dev-sdk'
-import type { SpikeAnalysis, CheckpointScores } from '@/lib/spike-types'
+import type { SpikeAnalysis, CheckpointScores, CheckpointConfidence } from '@/lib/spike-types'
 import { extractFrames } from '@/lib/extract-frames'
 import { createJob, updateJob, completeJob, failJob } from '@/lib/analysis-jobs'
 
@@ -68,6 +68,12 @@ Return your analysis as a JSON object with this EXACT structure (no markdown, no
     "bow_and_arrow": <0-100>, "arm_swing_speed": <0-100>, "contact_point": <0-100>, "wrist_snap": <0-100>, "contact_height": <0-100>,
     "follow_through": <0-100>, "landing_balance": <0-100>
   },
+  "confidence": {
+    "approach_speed": <0-100>, "approach_angle": <0-100>, "last_step_length": <0-100>, "footwork_rhythm": <0-100>, "arms_swing_back": <0-100>,
+    "vertical_jump_conversion": <0-100>, "hip_shoulder_rotation": <0-100>, "body_position_air": <0-100>, "torso_angle_air": <0-100>,
+    "bow_and_arrow": <0-100>, "arm_swing_speed": <0-100>, "contact_point": <0-100>, "wrist_snap": <0-100>, "contact_height": <0-100>,
+    "follow_through": <0-100>, "landing_balance": <0-100>
+  },
   "checkpointFeedback": {
     "approach_speed": "<1-2 specific sentences>", "approach_angle": "<1-2 specific sentences>", "last_step_length": "<1-2 specific sentences>", "footwork_rhythm": "<1-2 specific sentences>", "arms_swing_back": "<1-2 specific sentences>",
     "vertical_jump_conversion": "<1-2 specific sentences>", "hip_shoulder_rotation": "<1-2 specific sentences>", "body_position_air": "<1-2 specific sentences>", "torso_angle_air": "<1-2 specific sentences about torso>",
@@ -89,10 +95,25 @@ Return your analysis as a JSON object with this EXACT structure (no markdown, no
   "priorityOrder": ["<weakest phase>", "<second weakest>", "<third>", "<strongest>"]
 }
 
-Be EXTREMELY specific. Reference what you actually see in the frames. Return ONLY the JSON.`
+CONFIDENCE SCORES (CRITICAL):
+For EACH checkpoint, also provide a confidence score (0-100) indicating how certain you are about your assessment:
+- 76-100: High confidence — the checkpoint is clearly visible in the frames
+- 26-75: Low confidence — partially visible, some guessing required
+- 0-25: Not visible — the checkpoint cannot be assessed from these frames
+- If a checkpoint cannot be determined from the frames, set score=0 and confidence=0.
 
-function clampScore(val: number): number {
-  const n = typeof val === 'number' && !isNaN(val) ? val : 50
+The following 4 checkpoints measure DYNAMIC MOTION that is inherently difficult to assess from static frames:
+- approach_speed, footwork_rhythm, arm_swing_speed, vertical_jump_conversion
+For these, set confidence lower unless the frame sequence clearly captures the motion.
+
+Also include: "framesWithPlayer": <number of frames (out of ${FRAME_COUNT}) where the player is clearly visible>
+
+Be EXTREMELY specific. Reference what you actually see in the frames. If you cannot see something, say so honestly with score=0 and confidence=0. Return ONLY the JSON.`
+
+const FRAME_COUNT = 8
+
+function clampScore(val: number, defaultVal = 0): number {
+  const n = typeof val === 'number' && !isNaN(val) ? val : defaultVal
   return Math.round(Math.max(0, Math.min(100, n)))
 }
 
@@ -112,8 +133,10 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
     ]
 
     const scores: Record<string, number> = {}
+    const confidence: Record<string, number> = {}
     for (const key of scoreKeys) {
       scores[key] = clampScore(data.scores?.[key])
+      confidence[key] = clampScore(data.confidence?.[key])
     }
 
     const approachKeys = ['approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm', 'arms_swing_back']
@@ -143,6 +166,7 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
 
     return {
       scores: scores as unknown as CheckpointScores,
+      confidence: confidence as unknown as CheckpointConfidence,
       phaseAnalysis: {
         approach: {
           score: data.phaseAnalysis?.approach?.score ?? avg(approachKeys),
@@ -172,6 +196,11 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
       estimatedApproachSpeed: ['slow', 'moderate', 'fast', 'explosive'].includes(data.estimatedApproachSpeed) ? data.estimatedApproachSpeed : 'moderate',
       overallPower: clampScore(data.overallPower),
       priorityOrder,
+      metadata: {
+        frameCount,
+        averageConfidence: Math.round(Object.values(confidence).reduce((s, v) => s + v, 0) / scoreKeys.length),
+        framesWithPlayer: typeof data.framesWithPlayer === 'number' ? data.framesWithPlayer : undefined,
+      },
     } as SpikeAnalysis
   } catch {
     return null
@@ -280,7 +309,9 @@ export async function POST(request: NextRequest) {
         updateJob(jobId, { step: 'extracted', message: `Extracted ${framePaths.length} frames. Preparing AI analysis...`, percent: 25 })
 
         // Step 2: AI Analysis
-        const fullPrompt = `${ANALYSIS_PROMPT}\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video.`
+        const fullPrompt = ANALYSIS_PROMPT
+          .replace('${FRAME_COUNT}', String(framePaths.length))
+          + `\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video.`
 
         updateJob(jobId, { step: 'analyzing', message: 'AI is analyzing your spike technique...', percent: 35 })
 
