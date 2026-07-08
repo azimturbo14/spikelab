@@ -151,3 +151,22 @@ Stage Summary:
 - analyze-spike/route.ts: ~230 lines (was ~375 lines with VLM) — simpler, no API key needed
 - No OPENAI_API_KEY required anymore
 - Full pipeline verified: upload → YOLOv8 analysis → JSON → frontend rendering
+---
+Task ID: 1
+Agent: Main
+Task: Fix analysis timeout - install missing Python ML dependencies
+
+Work Log:
+- Investigated timeout error on video analysis
+- Discovered `ultralytics` Python package was not installed (ModuleNotFoundError)
+- Installed full dependency chain: ultralytics, torch (CPU), torchvision, opencv-python, polars, ultralytics-thop, nvidia-ml-py
+- Verified YOLOv8n-pose model loads correctly
+- Tested spike_pose_analysis.py with real video - produces valid JSON output
+- Tested end-to-end API pipeline: POST /api/analyze-spike → job created → YOLO analysis completes in ~12s → GET /api/analyze-status returns valid analysis data
+- Verified app renders correctly in browser
+
+Stage Summary:
+- Root cause: Missing Python packages (ultralytics, torch) caused immediate failure of YOLOv8 analysis script
+- Fix: Installed all required dependencies via pip3
+- Analysis pipeline now works: video upload → YOLOv8 pose estimation → biomechanical scores → JSON response
+- Note: Python dependencies installed in system venv at /home/z/.venv - may need re-installation if environment changes
