@@ -6,22 +6,15 @@ import path from 'path'
  * Smart frame extraction for volleyball spike videos.
  *
  * Strategy:
- * 1. Use ffmpeg scene detection to find motion peaks
- * 2. Cluster motion points to eliminate high-fps duplicates
- * 3. Find the densest cluster = the spike action
- * 4. Extract frames concentrated around that action window
- * 5. Fall back to even spacing if motion detection fails
- *
- * IMPORTANT: Frames are extracted SEQUENTIALLY (not in parallel)
- * because the sandbox kills parallel ffmpeg processes.
+ * 1. For short videos (<8s): skip motion detection, use even spacing
+ * 2. For longer videos: use scene detection to find action window
+ * 3. All frame extractions are SEQUENTIAL (parallel ffmpeg kills the sandbox)
+ * 4. Generous timeouts and fallbacks to maximize reliability
  */
 
-interface MotionPoint {
-  time: number
-  score: number
-}
-
-const MIN_FRAME_SIZE = 1024 // 1KB minimum for a valid frame
+const MIN_FRAME_SIZE = 100 // 100B minimum — even tiny frames may be valid
+const FRAME_EXTRACTION_TIMEOUT = 15_000 // per-frame timeout
+const MOTION_DETECT_TIMEOUT = 20_000 // scene detection timeout
 
 /** Get video duration via ffprobe */
 function getDuration(videoPath: string): Promise<number> {
@@ -40,42 +33,48 @@ function getDuration(videoPath: string): Promise<number> {
   })
 }
 
-/** Detect motion/scene changes using ffmpeg's scene filter */
-function detectMotion(videoPath: string, duration: number): Promise<MotionPoint[]> {
+/** Detect motion/scene changes using ffmpeg's scene filter, with explicit timeout */
+function detectMotion(videoPath: string, duration: number): Promise<{ time: number; score: number }[]> {
   return new Promise((resolve) => {
     const args = [
       '-i', videoPath,
-      '-vf', "select='gt(scene,0.012)',showinfo",
+      '-vf', "select='gt(scene,0.015)',showinfo",
       '-f', 'rawvideo',
       '-y', '/dev/null',
     ]
 
+    // Explicit timeout fallback
+    const timer = setTimeout(() => {
+      console.warn('[SpikeLab] Motion detection timed out, using empty result')
+      resolve([])
+    }, MOTION_DETECT_TIMEOUT)
+
     execFile('ffmpeg', args, {
-      timeout: 30_000,
+      timeout: MOTION_DETECT_TIMEOUT - 1000,
       maxBuffer: 10 * 1024 * 1024,
     }, (_err, _stdout, stderr) => {
+      clearTimeout(timer)
+
       const rawTimes: number[] = []
       const ptsTimeRegex = /pts_time:(\d+\.?\d*)/g
       let match: RegExpExecArray | null
       const seen = new Set<number>()
       while ((match = ptsTimeRegex.exec(stderr)) !== null) {
         const time = parseFloat(match[1])
-        const rounded = Math.round(time * 60) / 60
+        const rounded = Math.round(time * 30) / 30
         if (time > 0 && time < duration && !seen.has(rounded)) {
           seen.add(rounded)
           rawTimes.push(time)
         }
       }
 
-      // Cluster points within 0.2s to eliminate high-fps duplicates.
-      // Each cluster becomes one motion point with score = cluster size.
-      const points: MotionPoint[] = []
-      const clusterGap = 0.2
+      // Cluster points within 0.3s
+      const points: { time: number; score: number }[] = []
       let clusterStart = 0
       for (let i = 1; i <= rawTimes.length; i++) {
         const atEnd = i === rawTimes.length
         const gap = atEnd ? Infinity : rawTimes[i] - rawTimes[i - 1]
-        if (gap > clusterGap || atEnd) {
+        if (gap > 0.3 || atEnd) {
           const cluster = rawTimes.slice(clusterStart, i)
           const centroid = cluster.reduce((a, b) => a + b, 0) / cluster.length
           points.push({ time: centroid, score: cluster.length })
@@ -89,76 +88,71 @@ function detectMotion(videoPath: string, duration: number): Promise<MotionPoint[
 }
 
 /**
- * Find the densest cluster of motion points using weighted density.
- * A cluster with many high-score points in a small window wins.
- * Minimum window of 2.0s ensures full spike coverage.
+ * Find the densest cluster of motion points.
  */
-function findActionWindow(points: MotionPoint[], duration: number, maxWindowSize: number): { start: number; end: number } {
+function findActionWindow(
+  points: { time: number; score: number }[],
+  duration: number,
+  maxWindowSize: number
+): { start: number; end: number } {
   if (points.length === 0) {
-    const margin = duration * 0.2
+    const margin = duration * 0.15
     return { start: margin, end: duration - margin }
   }
 
   const sorted = [...points].sort((a, b) => a.time - b.time)
-  const minWindow = 2.0
-  const windowSizes = [2.0, 2.5, 3.0].map(w => Math.min(w, maxWindowSize))
+  const windowSize = Math.min(2.5, maxWindowSize)
 
   let bestStart = 0
   let bestEnd = sorted[0].time + 2
   let bestDensity = 0
 
-  for (const windowSize of windowSizes) {
-    for (let i = 0; i < sorted.length; i++) {
-      let count = 0
-      let windowEnd = sorted[i].time
-      for (let j = i; j < sorted.length; j++) {
-        if (sorted[j].time - sorted[i].time <= windowSize) {
-          count++
-          windowEnd = sorted[j].time
-        } else {
-          break
-        }
-      }
-      const windowSpan = Math.max(windowEnd - sorted[i].time, 0.1)
-      const density = sorted.slice(i, i + count).reduce((sum, p) => sum + p.score, 0) / windowSpan
-
-      if (density > bestDensity) {
-        bestDensity = density
-        bestStart = i
-        bestEnd = windowEnd
-      }
+  for (let i = 0; i < sorted.length; i++) {
+    let count = 0
+    let windowEnd = sorted[i].time
+    for (let j = i; j < sorted.length; j++) {
+      if (sorted[j].time - sorted[i].time <= windowSize) {
+        count++
+        windowEnd = sorted[j].time
+      } else break
+    }
+    const windowSpan = Math.max(windowEnd - sorted[i].time, 0.1)
+    const density = sorted.slice(i, i + count).reduce((sum, p) => sum + p.score, 0) / windowSpan
+    if (density > bestDensity) {
+      bestDensity = density
+      bestStart = i
+      bestEnd = windowEnd
     }
   }
 
-  // Ensure minimum window size
   let start = sorted[bestStart].time
   let end = bestEnd
-  if (end - start < minWindow) {
+  // Ensure minimum 2s window
+  if (end - start < 2.0) {
     const center = (start + end) / 2
-    const halfMin = minWindow / 2
-    start = Math.max(0, center - halfMin)
-    end = Math.min(duration, center + halfMin)
-    if (end - start < minWindow) {
-      if (start === 0) end = Math.min(duration, minWindow)
-      else start = Math.max(0, end - minWindow)
-    }
+    start = Math.max(0, center - 1)
+    end = Math.min(duration, center + 1)
   }
 
-  const clusterDuration = end - start
-  const padding = clusterDuration * 0.15
+  const padding = (end - start) * 0.15
   return {
     start: Math.max(0, start - padding),
     end: Math.min(duration, end + padding),
   }
 }
 
-/** Extract a single frame at a specific timestamp, with file validation */
+/** Extract a single frame at a specific timestamp */
 function extractSingleFrame(
   videoPath: string,
   outputPath: string,
   timestamp: number
 ): Promise<boolean> {
   return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[SpikeLab] Frame extraction timed out at ${timestamp.toFixed(2)}s`)
+      resolve(false)
+    }, FRAME_EXTRACTION_TIMEOUT)
+
     execFile('ffmpeg', [
       '-ss', timestamp.toString(),
       '-i', videoPath,
@@ -166,9 +160,9 @@ function extractSingleFrame(
       '-q:v', '2',
       '-y',
       outputPath,
-    ], { timeout: 30_000 }, (err) => {
+    ], { timeout: FRAME_EXTRACTION_TIMEOUT - 500 }, (err) => {
+      clearTimeout(timer)
       if (err) { resolve(false); return }
-      // Validate the file exists and has real content
       try {
         const stat = statSync(outputPath)
         resolve(stat.size >= MIN_FRAME_SIZE)
@@ -179,10 +173,7 @@ function extractSingleFrame(
   })
 }
 
-/**
- * Extract multiple frames SEQUENTIALLY.
- * Parallel extraction causes the sandbox to kill ffmpeg processes.
- */
+/** Extract frames SEQUENTIALLY to avoid sandbox killing parallel ffmpeg */
 async function extractFramesSequential(
   videoPath: string,
   timestamps: number[],
@@ -202,8 +193,23 @@ async function extractFramesSequential(
   return extractedPaths
 }
 
+/** Generate evenly-spaced timestamps */
+function generateEvenTimestamps(count: number, start: number, end: number): number[] {
+  const timestamps: number[] = []
+  if (count <= 1) {
+    timestamps.push((start + end) / 2)
+  } else {
+    for (let i = 0; i < count; i++) {
+      const t = i / (count - 1)
+      timestamps.push(start + (end - start) * t)
+    }
+  }
+  return timestamps
+}
+
 /**
- * Main export: Extract N frames intelligently from a spike video.
+ * Main export: Extract frames from a spike video.
+ * Returns array of file paths to extracted JPEG frames.
  */
 export async function extractFrames(
   videoPath: string,
@@ -214,29 +220,31 @@ export async function extractFrames(
   const duration = await getDuration(videoPath)
   console.log(`${logPrefix} Video duration: ${duration.toFixed(2)}s`)
 
-  if (duration < 3) {
-    return extractEvenly(videoPath, outputDir, count, duration, logPrefix)
-  }
+  let timestamps: number[]
 
-  const motionPoints = await detectMotion(videoPath, duration)
-  console.log(`${logPrefix} Motion detection found ${motionPoints.length} motion points`)
+  // For short videos or as fallback: use even spacing
+  const useEvenSpacing = duration < 8
 
-  const actionWindowDuration = Math.min(duration * 0.6, 4.0)
-  const actionWindow = findActionWindow(motionPoints, duration, actionWindowDuration)
-  console.log(`${logPrefix} Action window: ${actionWindow.start.toFixed(2)}s - ${actionWindow.end.toFixed(2)}s (${(actionWindow.end - actionWindow.start).toFixed(2)}s)`)
-
-  const windowDuration = actionWindow.end - actionWindow.start
-  const timestamps: number[] = []
-
-  if (windowDuration < 1) {
-    for (let i = 0; i < count; i++) {
-      timestamps.push(actionWindow.start + (windowDuration * i) / Math.max(count - 1, 1))
-    }
+  if (useEvenSpacing) {
+    console.log(`${logPrefix} Using even spacing (short video)`)
+    const start = duration * 0.05
+    const end = duration * 0.95
+    timestamps = generateEvenTimestamps(count, start, end)
   } else {
-    for (let i = 0; i < count; i++) {
-      const t = i / (count - 1)
-      const biased = 0.15 + 0.7 * t
-      timestamps.push(actionWindow.start + windowDuration * biased)
+    // Try motion detection for longer videos
+    console.log(`${logPrefix} Running motion detection...`)
+    const motionPoints = await detectMotion(videoPath, duration)
+    console.log(`${logPrefix} Found ${motionPoints.length} motion points`)
+
+    if (motionPoints.length >= 3) {
+      const actionWindow = findActionWindow(motionPoints, duration, Math.min(duration * 0.6, 4.0))
+      console.log(`${logPrefix} Action window: ${actionWindow.start.toFixed(2)}s - ${actionWindow.end.toFixed(2)}s`)
+      timestamps = generateEvenTimestamps(count, actionWindow.start, actionWindow.end)
+    } else {
+      console.log(`${logPrefix} Not enough motion points, using even spacing`)
+      const start = duration * 0.1
+      const end = duration * 0.9
+      timestamps = generateEvenTimestamps(count, start, end)
     }
   }
 
@@ -244,39 +252,20 @@ export async function extractFrames(
 
   const extractedPaths = await extractFramesSequential(videoPath, timestamps, outputDir, logPrefix)
 
-  if (extractedPaths.length === 0) {
-    console.warn(`${logPrefix} All motion-based extractions failed, falling back to even spacing`)
-    return extractEvenly(videoPath, outputDir, count, duration, logPrefix)
+  // Fallback: if all extractions in the action window failed, try even spacing across full video
+  if (extractedPaths.length === 0 && !useEvenSpacing) {
+    console.warn(`${logPrefix} All extractions failed, trying full video even spacing`)
+    const start = duration * 0.05
+    const end = duration * 0.95
+    timestamps = generateEvenTimestamps(count, start, end)
+    const retryPaths = await extractFramesSequential(videoPath, timestamps, outputDir, logPrefix)
+    if (retryPaths.length > 0) return retryPaths
   }
-
-  console.log(`${logPrefix} Successfully extracted ${extractedPaths.length}/${count} frames from action window`)
-  return extractedPaths
-}
-
-/** Fallback: extract frames evenly spaced, SEQUENTIALLY */
-async function extractEvenly(
-  videoPath: string,
-  outputDir: string,
-  count: number,
-  duration: number,
-  logPrefix: string
-): Promise<string[]> {
-  const startPct = 0.05
-  const endPct = 0.95
-  const interval = (endPct - startPct) / (count + 1)
-
-  const timestamps: number[] = []
-  for (let i = 0; i < count; i++) {
-    timestamps.push((startPct + interval * (i + 1)) * duration)
-  }
-
-  console.log(`${logPrefix} Fallback: extracting ${count} frames evenly spaced`)
-
-  const extractedPaths = await extractFramesSequential(videoPath, timestamps, outputDir, logPrefix)
 
   if (extractedPaths.length === 0) {
-    throw new Error('Failed to extract any frames from video.')
+    throw new Error('Failed to extract any frames from the video. The file may be corrupted or unsupported.')
   }
 
+  console.log(`${logPrefix} Successfully extracted ${extractedPaths.length}/${count} frames`)
   return extractedPaths
 }

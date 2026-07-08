@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { execFile } from 'child_process'
 import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
@@ -7,6 +6,13 @@ import ZAI from 'z-ai-web-dev-sdk'
 import type { SpikeAnalysis, CheckpointScores } from '@/lib/spike-types'
 import { extractFrames } from '@/lib/extract-frames'
 import { createJob, updateJob, completeJob, failJob } from '@/lib/analysis-jobs'
+
+// Prevent unhandled rejections from crashing the dev server
+if (typeof process !== 'undefined' && process.on) {
+  process.on('unhandledRejection', (reason) => {
+    console.error('[SpikeLab] Unhandled rejection (prevented crash):', reason)
+  })
+}
 
 export const maxDuration = 120
 export const dynamic = 'force-dynamic'
@@ -255,11 +261,19 @@ export async function POST(request: NextRequest) {
         updateJob(jobId, { step: 'extracting', message: 'Extracting key frames from video...', percent: 10 })
 
         const frameCount = 8
-        const framePaths = await extractFrames(videoPath, tempDir, frameCount)
+        let framePaths: string[]
+        try {
+          framePaths = await extractFrames(videoPath, tempDir, frameCount)
+        } catch (frameErr: unknown) {
+          const msg = frameErr instanceof Error ? frameErr.message : 'Frame extraction failed'
+          console.error(`[SpikeLab] [${jobId}] Frame extraction error:`, msg)
+          failJob(jobId, msg)
+          return
+        }
         console.log(`[SpikeLab] [${jobId}] Extracted ${framePaths.length} frames from video`)
 
         if (framePaths.length === 0) {
-          failJob(jobId, 'Could not extract any frames from the video. Please try a different video.')
+          failJob(jobId, 'Could not extract any frames from the video. Please try a different video format.')
           return
         }
 
