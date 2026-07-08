@@ -97,3 +97,24 @@ Stage Summary:
 - Short videos (<8s) use fast even-spacing instead of slow motion detection
 - Background processing errors no longer crash the dev server
 - User's 6.24s iPhone video will use even spacing (fast path)
+---
+Task ID: 1
+Agent: Main
+Task: Disconnect SpikeLab from Z.ai servers — make it self-hostable on Vercel
+
+Work Log:
+- Audited entire codebase for Z.ai dependencies (found 8 across 6 files)
+- Replaced `z-ai-web-dev-sdk` VLM call in `analyze-spike/route.ts` with direct OpenAI-compatible fetch API
+- Removed `z-ai-web-dev-sdk` from package.json dependencies (1 package removed)
+- Deleted dead code: `visualize-spike/route.ts` (used `z-ai` CLI, never called from frontend)
+- Deleted Z.ai infrastructure: `Caddyfile`, `examples/websocket/`, `website-content.json`
+- Created `.env.example` with deployment instructions for Vercel
+- Verified zero Z.ai references remain in src/
+- Compiled and served 200 OK
+- Committed and pushed to GitHub (721e92c)
+
+Stage Summary:
+- App is now fully self-hostable — no Z.ai server dependency
+- AI analysis uses standard OpenAI-compatible API (works with OpenAI, Groq, Together, OpenRouter, Azure)
+- 3 env vars: OPENAI_API_KEY (required), OPENAI_BASE_URL (optional), OPENAI_MODEL (optional)
+- 613 lines of Z.ai-specific code removed, 28 lines added
