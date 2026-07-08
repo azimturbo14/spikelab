@@ -91,18 +91,6 @@ export default function SpikeApp() {
     setError(null)
   }, [])
 
-  const handleSampleVideo = useCallback(async () => {
-    try {
-      const res = await fetch('/test-spike.mp4')
-      const blob = await res.blob()
-      const file = new File([blob], 'sample-spike.mp4', { type: 'video/mp4' })
-      setVideoFile(file)
-      setError(null)
-    } catch {
-      console.error('[SpikeLab] Failed to load sample video')
-    }
-  }, [])
-
   const handleAnalyze = async () => {
     if (!videoFile) return
     setIsAnalyzing(true)
@@ -421,7 +409,6 @@ export default function SpikeApp() {
                   </p>
                   <VideoUploader
                     onVideoReady={handleVideoReady}
-                    onSampleVideo={handleSampleVideo}
                     isAnalyzing={isAnalyzing}
                     disabled={isAnalyzing}
                   />

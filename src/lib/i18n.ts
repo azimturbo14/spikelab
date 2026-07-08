@@ -79,7 +79,6 @@ const en = {
     analyzeBtn: 'Analyze My Spike',
     analyzingBtn: 'Analyzing...',
     resetBtn: 'Reset',
-    sampleVideo: 'Try with sample video',
   },
 
   // Video Uploader
@@ -270,7 +269,6 @@ const ru: Translations = {
     analyzeBtn: 'Анализировать мой удар',
     analyzingBtn: 'Анализ...',
     resetBtn: 'Сбросить',
-    sampleVideo: 'Попробовать с примером',
   },
   uploader: {
     dropHere: 'Перетащите видео вашего удара сюда',
@@ -431,7 +429,6 @@ const uz: Translations = {
     analyzeBtn: 'Zarbamni tahlil qilish',
     analyzingBtn: 'Tahlil...',
     resetBtn: "Qayta boshlash",
-    sampleVideo: "Namuna bilan sinab ko'ring",
   },
   uploader: {
     dropHere: 'Hujum zarbasi videongizni shu yerga tashlang',

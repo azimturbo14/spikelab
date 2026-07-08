@@ -1,12 +1,11 @@
 'use client';
 
-import { Upload, X, Loader2, AlertCircle, Volleyball } from 'lucide-react';
+import { X, Loader2, AlertCircle, Volleyball } from 'lucide-react';
 import { useCallback, useState, useRef } from 'react';
 import { useI18n } from '@/lib/i18n-store';
 
 interface VideoUploaderProps {
   onVideoReady: (file: File) => void;
-  onSampleVideo: () => void;
   isAnalyzing: boolean;
   disabled: boolean;
 }
@@ -21,7 +20,6 @@ function formatFileSize(bytes: number): string {
 
 export default function VideoUploader({
   onVideoReady,
-  onSampleVideo,
   isAnalyzing,
   disabled,
 }: VideoUploaderProps) {
@@ -198,20 +196,6 @@ export default function VideoUploader({
             <p className="text-xs text-muted-foreground/60">
               {t().uploader.formats}
             </p>
-
-            {/* Sample video button */}
-            {!disabled && !isAnalyzing && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSampleVideo();
-                }}
-                className="mt-1 text-xs font-medium text-primary hover:text-primary/80 underline underline-offset-2 transition-colors"
-              >
-                {t().upload.sampleVideo}
-              </button>
-            )}
           </div>
         ) : (
           /* Video preview */
