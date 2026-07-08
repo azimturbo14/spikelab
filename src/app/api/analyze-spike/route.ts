@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
-import ZAI from 'z-ai-web-dev-sdk'
+// Direct OpenAI-compatible API — no Z.ai dependency
+// Configure via env vars: OPENAI_API_KEY (required), OPENAI_BASE_URL (optional), OPENAI_MODEL (optional)
 import type { SpikeAnalysis, CheckpointScores, CheckpointConfidence } from '@/lib/spike-types'
 import { extractFrames } from '@/lib/extract-frames'
 import { createJob, updateJob, completeJob, failJob } from '@/lib/analysis-jobs'
@@ -207,15 +208,15 @@ function parseAndValidate(raw: string): SpikeAnalysis | null {
   }
 }
 
-/** Cached ZAI instance */
-let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null
-async function getZai() {
-  if (!zaiInstance) zaiInstance = await ZAI.create()
-  return zaiInstance
-}
-
 async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<string> {
-  const zai = await getZai()
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is not set. Please configure it in your Vercel project settings or .env file.')
+  }
+
+  const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+  const model = process.env.OPENAI_MODEL || 'gpt-4o'
+
   const content: Array<{ type: string; image_url?: { url: string }; text?: string }> = [
     { type: 'text', text: prompt },
   ]
@@ -228,13 +229,26 @@ async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<
     })
   }
 
-  const response = await zai.chat.completions.createVision({
-    messages: [{ role: 'user', content }],
-    thinking: { type: 'disabled' },
-    max_tokens: 4096,
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content }],
+      max_tokens: 4096,
+    }),
   })
 
-  return response.choices?.[0]?.message?.content || ''
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => 'unknown')
+    throw new Error(`Vision API error (${response.status}): ${errorBody}`)
+  }
+
+  const data = await response.json()
+  return data.choices?.[0]?.message?.content || ''
 }
 
 /**
