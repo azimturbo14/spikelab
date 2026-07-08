@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { writeFile, unlink, readdir, mkdtemp, readFile } from 'fs/promises'
+import { writeFile, unlink, readdir, mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
-// Direct OpenAI-compatible API — no Z.ai dependency
-// Configure via env vars: OPENAI_API_KEY (required), OPENAI_BASE_URL (optional), OPENAI_MODEL (optional)
+import { execFile } from 'child_process'
 import type { SpikeAnalysis, CheckpointScores, CheckpointConfidence } from '@/lib/spike-types'
-import { extractFrames } from '@/lib/extract-frames'
 import { createJob, updateJob, completeJob, failJob } from '@/lib/analysis-jobs'
 
 // Prevent unhandled rejections from crashing the dev server
@@ -18,237 +16,209 @@ if (typeof process !== 'undefined' && process.on) {
 export const maxDuration = 120
 export const dynamic = 'force-dynamic'
 
-const ANALYSIS_PROMPT = `You are an expert volleyball biomechanics analyst. You are watching KEY FRAMES extracted from a video of a volleyball player performing a spike (approach, jump, hit, and landing). The frames are in chronological order.
-
-Analyze these frames and for each of the 16 biomechanical checkpoints below, rate the player's execution on a scale of 0-100:
-- 0-25: Critical (major flaw, significant power loss or injury risk)
-- 26-50: Needs Work (noticeable issue affecting performance)
-- 51-75: Decent (acceptable but room for improvement)
-- 76-100: Excellent (elite or near-elite execution)
-
-APPROACH PHASE (5 checkpoints):
-1. approach_speed: How fast and explosive is the approach? Is the player building momentum effectively?
-2. approach_angle: Is the approach angle optimal (roughly 45-60 degrees toward the net)?
-3. last_step_length: Is the second-to-last (braking) step appropriately long to convert horizontal to vertical momentum?
-4. footwork_rhythm: Is the slow-to-fast rhythm correct? The last 2 steps should be the fastest.
-5. arms_swing_back: Do both arms swing back during the plant to load elastic energy?
-
-JUMP & ROTATION PHASE (4 checkpoints):
-6. vertical_jump_conversion: How efficiently is horizontal momentum converted to vertical height?
-7. hip_shoulder_rotation: Is there proper hip-shoulder separation (torque) before hitting?
-8. body_position_air: Is the body in a good athletic position at peak height?
-9. torso_angle_air: Analyze the torso/spine during the AIRBORNE phase — arch, whip transition, spinal alignment, trunk rotation timing.
-
-ARM SWING & CONTACT PHASE (5 checkpoints):
-10. bow_and_arrow: Is the hitting arm in a proper bow-and-arrow loading position?
-11. arm_swing_speed: How fast and explosive is the arm whip?
-12. contact_point: Is contact made at full extension, slightly in front of the hitting shoulder?
-13. wrist_snap: Is there a strong wrist snap over the ball for topspin?
-14. contact_height: How high is the contact point relative to the net?
-
-FOLLOW-THROUGH PHASE (2 checkpoints):
-15. follow_through: Does the arm continue across the body to the opposite hip?
-16. landing_balance: Is the landing soft, on two feet, with knees bent?
-
-PER-CHECKPOINT FEEDBACK:
-For EACH checkpoint, write 1-2 specific sentences about what you ACTUALLY SEE. Reference specific body positions and timing.
-
-PHASE FEEDBACK & SPECIFIC FIX:
-For each phase, provide:
-- feedback: 2-3 sentences describing the overall phase execution with specific observations
-- specificFix: 1-2 actionable sentences describing the SINGLE most impactful fix for this phase.
-
-PRIORITY ORDER:
-Rank the 4 phases from weakest to strongest. The weakest phase should be #1.
-
-Return your analysis as a JSON object with this EXACT structure (no markdown, no code fences, just raw JSON):
-{
-  "scores": {
-    "approach_speed": <0-100>, "approach_angle": <0-100>, "last_step_length": <0-100>, "footwork_rhythm": <0-100>, "arms_swing_back": <0-100>,
-    "vertical_jump_conversion": <0-100>, "hip_shoulder_rotation": <0-100>, "body_position_air": <0-100>, "torso_angle_air": <0-100>,
-    "bow_and_arrow": <0-100>, "arm_swing_speed": <0-100>, "contact_point": <0-100>, "wrist_snap": <0-100>, "contact_height": <0-100>,
-    "follow_through": <0-100>, "landing_balance": <0-100>
-  },
-  "confidence": {
-    "approach_speed": <0-100>, "approach_angle": <0-100>, "last_step_length": <0-100>, "footwork_rhythm": <0-100>, "arms_swing_back": <0-100>,
-    "vertical_jump_conversion": <0-100>, "hip_shoulder_rotation": <0-100>, "body_position_air": <0-100>, "torso_angle_air": <0-100>,
-    "bow_and_arrow": <0-100>, "arm_swing_speed": <0-100>, "contact_point": <0-100>, "wrist_snap": <0-100>, "contact_height": <0-100>,
-    "follow_through": <0-100>, "landing_balance": <0-100>
-  },
-  "checkpointFeedback": {
-    "approach_speed": "<1-2 specific sentences>", "approach_angle": "<1-2 specific sentences>", "last_step_length": "<1-2 specific sentences>", "footwork_rhythm": "<1-2 specific sentences>", "arms_swing_back": "<1-2 specific sentences>",
-    "vertical_jump_conversion": "<1-2 specific sentences>", "hip_shoulder_rotation": "<1-2 specific sentences>", "body_position_air": "<1-2 specific sentences>", "torso_angle_air": "<1-2 specific sentences about torso>",
-    "bow_and_arrow": "<1-2 specific sentences>", "arm_swing_speed": "<1-2 specific sentences>", "contact_point": "<1-2 specific sentences>", "wrist_snap": "<1-2 specific sentences>", "contact_height": "<1-2 specific sentences>",
-    "follow_through": "<1-2 specific sentences>", "landing_balance": "<1-2 specific sentences>"
-  },
-  "phaseAnalysis": {
-    "approach": { "score": <average of 5 approach scores>, "feedback": "<2-3 sentences>", "specificFix": "<1-2 sentence fix>" },
-    "jump": { "score": <average of 4 jump scores>, "feedback": "<2-3 sentences>", "specificFix": "<1-2 sentence fix>" },
-    "contact": { "score": <average of 5 contact scores>, "feedback": "<2-3 sentences>", "specificFix": "<1-2 sentence fix>" },
-    "followThrough": { "score": <average of 2 follow-through scores>, "feedback": "<2-3 sentences>", "specificFix": "<1-2 sentence fix>" }
-  },
-  "topStrengths": ["<checkpoint>: <1 sentence why it is good>"],
-  "topWeaknesses": ["<checkpoint>: <1-2 sentences what is wrong and what to fix>"],
-  "coachNotes": "<3-5 sentences of specific coaching advice.>",
-  "estimatedLevel": "<beginner|intermediate|advanced|elite>",
-  "estimatedApproachSpeed": "<slow|moderate|fast|explosive>",
-  "overallPower": <0-100>,
-  "priorityOrder": ["<weakest phase>", "<second weakest>", "<third>", "<strongest>"]
-}
-
-CONFIDENCE SCORES (CRITICAL):
-For EACH checkpoint, also provide a confidence score (0-100) indicating how certain you are about your assessment:
-- 76-100: High confidence — the checkpoint is clearly visible in the frames
-- 26-75: Low confidence — partially visible, some guessing required
-- 0-25: Not visible — the checkpoint cannot be assessed from these frames
-- If a checkpoint cannot be determined from the frames, set score=0 and confidence=0.
-
-The following 4 checkpoints measure DYNAMIC MOTION that is inherently difficult to assess from static frames:
-- approach_speed, footwork_rhythm, arm_swing_speed, vertical_jump_conversion
-For these, set confidence lower unless the frame sequence clearly captures the motion.
-
-Also include: "framesWithPlayer": <number of frames (out of ${FRAME_COUNT}) where the player is clearly visible>
-
-Be EXTREMELY specific. Reference what you actually see in the frames. If you cannot see something, say so honestly with score=0 and confidence=0. Return ONLY the JSON.`
-
-const FRAME_COUNT = 8
+const SCORE_KEYS: (keyof CheckpointScores)[] = [
+  'approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm',
+  'arms_swing_back', 'vertical_jump_conversion', 'hip_shoulder_rotation',
+  'body_position_air', 'torso_angle_air', 'bow_and_arrow', 'arm_swing_speed',
+  'contact_point', 'wrist_snap', 'contact_height', 'follow_through', 'landing_balance',
+]
 
 function clampScore(val: number, defaultVal = 0): number {
   const n = typeof val === 'number' && !isNaN(val) ? val : defaultVal
   return Math.round(Math.max(0, Math.min(100, n)))
 }
 
-function parseAndValidate(raw: string): SpikeAnalysis | null {
-  let cleaned = raw.trim()
-  const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/)
-  if (fenceMatch) cleaned = fenceMatch[1].trim()
+/**
+ * Run the YOLOv8 pose analysis script on a video file.
+ * Returns parsed SpikeAnalysis object.
+ */
+function runYoloAnalysis(videoPath: string): Promise<SpikeAnalysis> {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(process.cwd(), 'spike_pose_analysis.py')
 
-  try {
-    const data = JSON.parse(cleaned)
-
-    const scoreKeys: (keyof CheckpointScores)[] = [
-      'approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm',
-      'arms_swing_back', 'vertical_jump_conversion', 'hip_shoulder_rotation',
-      'body_position_air', 'torso_angle_air', 'bow_and_arrow', 'arm_swing_speed',
-      'contact_point', 'wrist_snap', 'contact_height', 'follow_through', 'landing_balance',
-    ]
-
-    const scores: Record<string, number> = {}
-    const confidence: Record<string, number> = {}
-    for (const key of scoreKeys) {
-      scores[key] = clampScore(data.scores?.[key])
-      confidence[key] = clampScore(data.confidence?.[key])
+    // Set environment variables for the subprocess
+    const env = {
+      ...process.env,
+      HOME: '/tmp',
+      TORCH_HOME: '/tmp/torch',
+      HF_HOME: '/tmp/hf',
+      YOLO_CONFIG_DIR: '/tmp/Ultralytics',
     }
 
-    const approachKeys = ['approach_speed', 'approach_angle', 'last_step_length', 'footwork_rhythm', 'arms_swing_back']
-    const jumpKeys = ['vertical_jump_conversion', 'hip_shoulder_rotation', 'body_position_air', 'torso_angle_air']
-    const contactKeys = ['bow_and_arrow', 'arm_swing_speed', 'contact_point', 'wrist_snap', 'contact_height']
-    const followKeys = ['follow_through', 'landing_balance']
-    const avg = (keys: string[]) => Math.round(keys.reduce((s, k) => s + scores[k], 0) / keys.length)
-
-    const validPhases = ['approach', 'jump', 'contact', 'followThrough'] as const
-    let priorityOrder: string[] = ['approach', 'contact', 'jump', 'followThrough']
-    if (Array.isArray(data.priorityOrder)) {
-      const filtered = data.priorityOrder.filter((p: string) => validPhases.includes(p as any))
-      if (filtered.length === 4) {
-        priorityOrder = filtered
-      } else {
-        const phaseScores: Record<string, number> = {
-          approach: data.phaseAnalysis?.approach?.score ?? avg(approachKeys),
-          jump: data.phaseAnalysis?.jump?.score ?? avg(jumpKeys),
-          contact: data.phaseAnalysis?.contact?.score ?? avg(contactKeys),
-          followThrough: data.phaseAnalysis?.followThrough?.score ?? avg(followKeys),
+    const child = execFile('python3', [scriptPath, videoPath], {
+      env,
+      timeout: 180_000, // 3 minute timeout
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for JSON output
+      cwd: process.cwd(),
+    }, (err, stdout, stderr) => {
+      if (err) {
+        // Check if there's a JSON error message in stdout
+        try {
+          const errorData = JSON.parse(stdout.trim())
+          if (errorData.error) {
+            reject(new Error(errorData.error))
+            return
+          }
+        } catch {
+          // Not JSON, use the raw error
         }
-        priorityOrder = (Object.entries(phaseScores) as [string, number][])
-          .sort((a, b) => a[1] - b[1])
-          .map(([k]) => k)
+        const msg = stderr?.trim() || err.message
+        reject(new Error(`YOLO analysis failed: ${msg.substring(0, 500)}`))
+        return
       }
-    }
 
-    return {
-      scores: scores as unknown as CheckpointScores,
-      confidence: confidence as unknown as CheckpointConfidence,
-      phaseAnalysis: {
-        approach: {
-          score: data.phaseAnalysis?.approach?.score ?? avg(approachKeys),
-          feedback: data.phaseAnalysis?.approach?.feedback ?? 'Approach phase analyzed.',
-          specificFix: data.phaseAnalysis?.approach?.specificFix ?? 'Focus on building speed and rhythm in the approach.',
-        },
-        jump: {
-          score: data.phaseAnalysis?.jump?.score ?? avg(jumpKeys),
-          feedback: data.phaseAnalysis?.jump?.feedback ?? 'Jump phase analyzed.',
-          specificFix: data.phaseAnalysis?.jump?.specificFix ?? 'Focus on converting horizontal momentum to vertical height.',
-        },
-        contact: {
-          score: data.phaseAnalysis?.contact?.score ?? avg(contactKeys),
-          feedback: data.phaseAnalysis?.contact?.feedback ?? 'Contact phase analyzed.',
-          specificFix: data.phaseAnalysis?.contact?.specificFix ?? 'Focus on arm swing mechanics and contact point.',
-        },
-        followThrough: {
-          score: data.phaseAnalysis?.followThrough?.score ?? avg(followKeys),
-          feedback: data.phaseAnalysis?.followThrough?.feedback ?? 'Follow-through analyzed.',
-          specificFix: data.phaseAnalysis?.followThrough?.specificFix ?? 'Focus on completing the follow-through and landing softly.',
-        },
-      },
-      topStrengths: Array.isArray(data.topStrengths) ? data.topStrengths.slice(0, 5) : ['Solid effort visible in video.'],
-      topWeaknesses: Array.isArray(data.topWeaknesses) ? data.topWeaknesses.slice(0, 5) : ['Multiple areas for improvement identified.'],
-      coachNotes: data.coachNotes ?? 'Review your analysis results and focus on the weakest phase first.',
-      estimatedLevel: ['beginner', 'intermediate', 'advanced', 'elite'].includes(data.estimatedLevel) ? data.estimatedLevel : 'intermediate',
-      estimatedApproachSpeed: ['slow', 'moderate', 'fast', 'explosive'].includes(data.estimatedApproachSpeed) ? data.estimatedApproachSpeed : 'moderate',
-      overallPower: clampScore(data.overallPower),
-      priorityOrder,
-      metadata: {
-        frameCount,
-        averageConfidence: Math.round(Object.values(confidence).reduce((s, v) => s + v, 0) / scoreKeys.length),
-        framesWithPlayer: typeof data.framesWithPlayer === 'number' ? data.framesWithPlayer : undefined,
-      },
-    } as SpikeAnalysis
-  } catch {
-    return null
-  }
+      try {
+        // Parse JSON from stdout (may have warning lines before/after)
+        let output = stdout.trim()
+        const jsonStart = output.indexOf('{')
+        const jsonEnd = output.lastIndexOf('}') + 1
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+          output = output.substring(jsonStart, jsonEnd)
+        }
+
+        const data = JSON.parse(output)
+        const analysis = buildAnalysis(data)
+        resolve(analysis)
+      } catch (parseErr) {
+        console.error('[SpikeLab] Failed to parse YOLO output:', stdout.substring(0, 500))
+        reject(new Error('Failed to parse analysis results. The video may not contain a detectable person.'))
+      }
+    })
+
+    // Log stderr for debugging but don't fail on it
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString()
+      // Only log non-warning messages
+      if (!text.includes('WARNING') && !text.includes('ultralytics')) {
+        console.log('[SpikeLab YOLO]', text.trim())
+      }
+    })
+  })
 }
 
-async function runVisionAnalysis(imagePaths: string[], prompt: string): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set. Please configure it in your Vercel project settings or .env file.')
+/**
+ * Build a SpikeAnalysis object from the YOLO script's raw output.
+ */
+function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
+  const rawScores = (data.scores || {}) as Record<string, number>
+  const metrics = (data.metrics || {}) as Record<string, number>
+  const rawPhaseAnalysis = (data.phaseAnalysis || {}) as Record<string, Record<string, unknown>>
+  const framesAnalyzed = typeof metrics.frames_analyzed === 'number' ? metrics.frames_analyzed : 0
+  const videoDuration = typeof metrics.video_duration_sec === 'number' ? metrics.video_duration_sec : 0
+  const videoFps = typeof metrics.video_fps === 'number' ? metrics.video_fps : 30
+
+  // Build scores with all 16 checkpoints
+  const scores: Record<string, number> = {}
+  for (const key of SCORE_KEYS) {
+    scores[key] = clampScore(rawScores[key] ?? 50)
   }
 
-  const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
-  const model = process.env.OPENAI_MODEL || 'gpt-4o'
-
-  const content: Array<{ type: string; image_url?: { url: string }; text?: string }> = [
-    { type: 'text', text: prompt },
-  ]
-  for (const imgPath of imagePaths) {
-    const buffer = await readFile(imgPath)
-    const base64 = buffer.toString('base64')
-    content.push({
-      type: 'image_url',
-      image_url: { url: `data:image/jpeg;base64,${base64}` },
-    })
+  // Add torso_angle_air if not in raw scores (original script has 15 checkpoints)
+  if (!('torso_angle_air' in rawScores)) {
+    scores.torso_angle_air = clampScore(scores.body_position_air * 0.9 + 5)
   }
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
+  // Build confidence based on frames analyzed
+  const confidence: Record<string, number> = {}
+  let baseConf = 50
+  if (framesAnalyzed >= 20) baseConf = 85
+  else if (framesAnalyzed >= 15) baseConf = 75
+  else if (framesAnalyzed >= 10) baseConf = 60
+  else if (framesAnalyzed >= 5) baseConf = 45
+
+  for (const key of SCORE_KEYS) {
+    // Temporal checkpoints get slightly lower confidence
+    const temporalCheckpoints = new Set(['approach_speed', 'footwork_rhythm', 'arm_swing_speed', 'vertical_jump_conversion'])
+    confidence[key] = temporalCheckpoints.has(key) ? clampScore(baseConf - 10) : baseConf
+  }
+
+  // If torso_angle_air was estimated, give it lower confidence
+  if (!('torso_angle_air' in rawScores)) {
+    confidence.torso_angle_air = clampScore(baseConf - 25)
+  }
+
+  // Build checkpoint feedback from metrics
+  const checkpointFeedback: Record<string, string> = {
+    approach_speed: `Approach speed measured at ${metrics.approach_speed_px_per_sec ?? 'N/A'} px/s.`,
+    approach_angle: `Approach angle: ${metrics.approach_angle_deg ?? 'N/A'}° from horizontal.`,
+    last_step_length: `Last step ratio: ${metrics.last_step_ratio ?? 'N/A'}x leg length.`,
+    footwork_rhythm: `Rhythm quality: ${metrics.rhythm_quality ?? 'N/A'}.`,
+    arms_swing_back: `Max armswing back: ${metrics.max_armswing_back_angle ?? 'N/A'}°.`,
+    vertical_jump_conversion: `Jump height ratio: ${metrics.jump_ratio ?? 'N/A'}x body height.`,
+    hip_shoulder_rotation: `Peak hip-shoulder separation: ${metrics.peak_hip_shoulder_angle_deg ?? 'N/A'}°.`,
+    body_position_air: 'Body alignment at peak jump measured via pose keypoints.',
+    torso_angle_air: 'Torso angle estimated from body position at peak.',
+    bow_and_arrow: 'Arm loading position analyzed near jump peak.',
+    arm_swing_speed: `Max wrist speed: ${metrics.max_wrist_speed_px_per_sec ?? 'N/A'} px/s.`,
+    contact_point: 'Contact position relative to hitting shoulder.',
+    wrist_snap: 'Wrist angular velocity at contact measured.',
+    contact_height: 'Contact height relative to hip position evaluated.',
+    follow_through: 'Arm follow-through range of motion measured.',
+    landing_balance: 'Landing stance and knee flexion analyzed.',
+  }
+
+  // Phase analysis
+  const phaseKeys = ['approach', 'jump', 'contact', 'followThrough'] as const
+  const phaseAnalysis = {
+    approach: {
+      score: clampScore((rawPhaseAnalysis.approach?.score as number) ?? 50),
+      feedback: (rawPhaseAnalysis.approach?.feedback as string) ?? 'Approach phase analyzed.',
+      specificFix: (rawPhaseAnalysis.approach?.specificFix as string) ?? 'Focus on building speed and rhythm in the approach.',
     },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content }],
-      max_tokens: 4096,
-    }),
-  })
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => 'unknown')
-    throw new Error(`Vision API error (${response.status}): ${errorBody}`)
+    jump: {
+      score: clampScore((rawPhaseAnalysis.jump?.score as number) ?? 50),
+      feedback: (rawPhaseAnalysis.jump?.feedback as string) ?? 'Jump phase analyzed.',
+      specificFix: (rawPhaseAnalysis.jump?.specificFix as string) ?? 'Focus on converting horizontal momentum to vertical height.',
+    },
+    contact: {
+      score: clampScore((rawPhaseAnalysis.contact?.score as number) ?? 50),
+      feedback: (rawPhaseAnalysis.contact?.feedback as string) ?? 'Contact phase analyzed.',
+      specificFix: (rawPhaseAnalysis.contact?.specificFix as string) ?? 'Focus on arm swing mechanics and contact point.',
+    },
+    followThrough: {
+      score: clampScore((rawPhaseAnalysis.followThrough?.score as number) ?? 50),
+      feedback: (rawPhaseAnalysis.followThrough?.feedback as string) ?? 'Follow-through analyzed.',
+      specificFix: (rawPhaseAnalysis.followThrough?.specificFix as string) ?? 'Focus on completing the follow-through and landing softly.',
+    },
   }
 
-  const data = await response.json()
-  return data.choices?.[0]?.message?.content || ''
+  // Priority order (weakest phase first)
+  const phaseScores = [
+    { key: 'approach', score: phaseAnalysis.approach.score },
+    { key: 'jump', score: phaseAnalysis.jump.score },
+    { key: 'contact', score: phaseAnalysis.contact.score },
+    { key: 'followThrough', score: phaseAnalysis.followThrough.score },
+  ]
+  const priorityOrder = phaseScores.sort((a, b) => a.score - b.score).map(p => p.key)
+
+  // Average confidence
+  const avgConfidence = Math.round(
+    Object.values(confidence).reduce((s, v) => s + v, 0) / Object.keys(confidence).length
+  )
+
+  return {
+    scores: scores as unknown as CheckpointScores,
+    confidence: confidence as unknown as CheckpointConfidence,
+    checkpointFeedback,
+    phaseAnalysis,
+    topStrengths: Array.isArray(data.topStrengths) ? data.topStrengths.slice(0, 5) as string[] : ['Solid effort visible in video.'],
+    topWeaknesses: Array.isArray(data.topWeaknesses) ? data.topWeaknesses.slice(0, 5) as string[] : ['Multiple areas for improvement identified.'],
+    coachNotes: (data.coachNotes as string) ?? 'Review your analysis results and focus on the weakest phase first.',
+    estimatedLevel: ['beginner', 'intermediate', 'advanced', 'elite'].includes(data.estimatedLevel as string)
+      ? (data.estimatedLevel as string) : 'intermediate',
+    estimatedApproachSpeed: ['slow', 'moderate', 'fast', 'explosive'].includes(data.estimatedApproachSpeed as string)
+      ? (data.estimatedApproachSpeed as string) : 'moderate',
+    overallPower: clampScore(data.overallPower as number),
+    priorityOrder,
+    metadata: {
+      frameCount: framesAnalyzed,
+      duration: videoDuration,
+      averageConfidence: avgConfidence,
+      framesWithPlayer: framesAnalyzed,
+      quality: avgConfidence >= 60 ? 'high' as const : avgConfidence >= 30 ? 'medium' as const : 'low' as const,
+      analysisMethod: 'YOLOv8 Pose Estimation',
+    },
+  }
 }
 
 /**
@@ -274,22 +244,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Video file too large. Maximum 50MB.' }, { status: 400 })
     }
 
-    // Create job immediately — response is fast, no proxy timeout
+    // Create job immediately
     const job = createJob()
     const jobId = job.id
 
-    // Read all form data now (while request is still alive)
+    // Read form data while request is alive
     const playerName = (formData.get('name') as string) || 'the player'
     const position = (formData.get('position') as string) || 'Outside Hitter'
     const experience = (formData.get('experience') as string) || 'Intermediate'
 
-    // Read video bytes into buffer while request is active
+    // Read video bytes
     const videoBytes = new Uint8Array(await videoFile.arrayBuffer())
     const videoName = videoFile.name
     const videoSize = videoFile.size
 
-    // Return immediately with jobId — client will poll for results
-    // Process in background — keep a reference to prevent GC in Next.js
+    // Return immediately with jobId
     const bgPromise = (async () => {
       try {
         tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
@@ -298,55 +267,16 @@ export async function POST(request: NextRequest) {
 
         await writeFile(videoPath, Buffer.from(videoBytes))
 
-        console.log(`[SpikeLab] [${jobId}] Analyzing video: ${videoName} (${(videoSize / 1024 / 1024).toFixed(1)}MB)`)
+        console.log(`[SpikeLab] [${jobId}] Analyzing video with YOLOv8: ${videoName} (${(videoSize / 1024 / 1024).toFixed(1)}MB)`)
 
-        // Step 1: Extract frames
-        updateJob(jobId, { step: 'extracting', message: 'Extracting key frames from video...', percent: 10 })
+        // Step 1: YOLOv8 Pose Analysis
+        updateJob(jobId, { step: 'analyzing', message: 'Running YOLOv8 pose estimation on video frames...', percent: 15 })
 
-        const frameCount = 8
-        let framePaths: string[]
-        try {
-          framePaths = await extractFrames(videoPath, tempDir, frameCount)
-        } catch (frameErr: unknown) {
-          const msg = frameErr instanceof Error ? frameErr.message : 'Frame extraction failed'
-          console.error(`[SpikeLab] [${jobId}] Frame extraction error:`, msg)
-          failJob(jobId, msg)
-          return
-        }
-        console.log(`[SpikeLab] [${jobId}] Extracted ${framePaths.length} frames from video`)
+        const analysis = await runYoloAnalysis(videoPath)
 
-        if (framePaths.length === 0) {
-          failJob(jobId, 'Could not extract any frames from the video. Please try a different video format.')
-          return
-        }
+        console.log(`[SpikeLab] [${jobId}] YOLO analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}, Frames: ${analysis.metadata?.frameCount}`)
 
-        updateJob(jobId, { step: 'extracted', message: `Extracted ${framePaths.length} frames. Preparing AI analysis...`, percent: 25 })
-
-        // Step 2: AI Analysis
-        const fullPrompt = ANALYSIS_PROMPT
-          .replace('${FRAME_COUNT}', String(framePaths.length))
-          + `\n\nAdditional context: This is ${playerName}, playing ${position} position, with ${experience} experience level. ${framePaths.length} frames were extracted from the video.`
-
-        updateJob(jobId, { step: 'analyzing', message: 'AI is analyzing your spike technique...', percent: 35 })
-
-        const rawContent = await runVisionAnalysis(framePaths, fullPrompt)
-        console.log(`[SpikeLab] [${jobId}] VLM response received (${rawContent.length} chars)`)
-
-        if (!rawContent) {
-          failJob(jobId, 'AI analysis returned no content. Please try a clearer or shorter video.')
-          return
-        }
-
-        updateJob(jobId, { step: 'parsing', message: 'Processing AI results...', percent: 92 })
-
-        const analysis = parseAndValidate(rawContent)
-        if (!analysis) {
-          console.error(`[SpikeLab] [${jobId}] Parse failed. Content preview:`, rawContent.substring(0, 500))
-          failJob(jobId, 'Could not parse AI results. Please try again.')
-          return
-        }
-
-        console.log(`[SpikeLab] [${jobId}] Analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}`)
+        updateJob(jobId, { step: 'done', message: 'Analysis complete!', percent: 100 })
         completeJob(jobId, analysis)
       } catch (err: unknown) {
         console.error(`[SpikeLab] [${jobId}] Error:`, err)

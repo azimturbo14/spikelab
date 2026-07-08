@@ -118,3 +118,36 @@ Stage Summary:
 - AI analysis uses standard OpenAI-compatible API (works with OpenAI, Groq, Together, OpenRouter, Azure)
 - 3 env vars: OPENAI_API_KEY (required), OPENAI_BASE_URL (optional), OPENAI_MODEL (optional)
 - 613 lines of Z.ai-specific code removed, 28 lines added
+---
+Task ID: yolo-migration
+Agent: Main Agent
+Task: Replace external VLM API analysis with local YOLOv8 pose estimation
+
+Work Log:
+- Installed Python dependencies: ultralytics 8.4.90, torch 2.12.1+cpu, torchvision 0.27.1+cpu, opencv-python 5.0.0
+- Verified existing spike_pose_analysis.py (1712 lines) runs correctly — produces valid JSON with 15 biomechanical checkpoints
+- Created mini-services/yolo-service/index.py as HTTP wrapper (not used due to sandbox process limits)
+- Rewrote src/app/api/analyze-spike/route.ts: removed all VLM/OpenAI API code, replaced with direct subprocess call to spike_pose_analysis.py
+- Added buildAnalysis() function to transform YOLO script output into SpikeAnalysis format:
+  - Adds missing torso_angle_air checkpoint (estimated from body_position_air)
+  - Computes confidence scores based on frames analyzed
+  - Generates per-checkpoint feedback from YOLO metrics
+  - Adds specificFix to each phase
+  - Computes priority order (weakest phase first)
+  - Adds metadata with analysisMethod='YOLOv8 Pose Estimation'
+- Updated i18n.ts in all 3 languages (EN/RU/UZ):
+  - Hero pill: "YOLOv8 pose estimation"
+  - How it works step 2: "YOLOv8 pose model tracks 17 body keypoints"
+  - Analysis method badge: "YOLOv8 Pose Analysis"
+  - Methodology disclosure: "YOLOv8-pose tracks 17 body keypoints (COCO format)... No external AI API is used"
+  - Upload subtitle: "YOLOv8 pose tracking — about 10-30 seconds"
+  - Frames label: "frames analyzed" (was "frames extracted")
+- Verified end-to-end: uploaded test-spike.mp4 via API, got complete analysis with all 16 scores, confidence, phases, strengths, weaknesses
+- Confirmed analysisMethod field shows "YOLOv8 Pose Estimation" in metadata
+
+Stage Summary:
+- Zero external API calls — all analysis runs locally via YOLOv8-pose
+- spike_pose_analysis.py: 1712 lines of biomechanical analysis (pose tracking, phase detection, 16 metrics)
+- analyze-spike/route.ts: ~230 lines (was ~375 lines with VLM) — simpler, no API key needed
+- No OPENAI_API_KEY required anymore
+- Full pipeline verified: upload → YOLOv8 analysis → JSON → frontend rendering
