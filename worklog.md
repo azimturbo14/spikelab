@@ -170,3 +170,25 @@ Stage Summary:
 - Fix: Installed all required dependencies via pip3
 - Analysis pipeline now works: video upload → YOLOv8 pose estimation → biomechanical scores → JSON response
 - Note: Python dependencies installed in system venv at /home/z/.venv - may need re-installation if environment changes
+---
+Task ID: 1
+Agent: Main
+Task: Fix analysis failing on Vercel — move YOLOv8 to browser
+
+Work Log:
+- Diagnosed: Vercel serverless cannot run Python/YOLOv8 (no Python runtime, no ffmpeg, 10s timeout)
+- Exported YOLOv8-pose model to ONNX format (12.9 MB) via ultralytics
+- Created src/lib/yolo-browser.ts (~2230 lines) — full client-side analysis pipeline
+- Fixed ONNX WASM loading issue (Turbopack bundler breaks WASM imports) → loaded from CDN
+- Updated SpikeApp.tsx to use client-side analyzeVideoInBrowser() instead of server API
+- Removed Python subprocess dependency for analysis
+- Verified end-to-end: video upload → browser YOLOv8 analysis → results displayed
+
+Stage Summary:
+- Analysis now runs 100% in the browser using ONNX Runtime Web (WASM)
+- Works on Vercel, static hosting, any platform — no Python/server needed
+- Uses YOLOv8-pose ONNX model (13MB, served from public/models/)
+- ONNX Runtime loaded from jsDelivr CDN to avoid bundler WASM issues
+- Frame extraction via HTML5 Video + Canvas API
+- All 16 biomechanical scores computed client-side
+- Pushed to GitHub: commit adc17ea
