@@ -34,7 +34,8 @@ function clampScore(val: number, defaultVal = 0): number {
  */
 function runYoloAnalysis(videoPath: string): Promise<SpikeAnalysis> {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(process.cwd(), 'spike_pose_analysis.py')
+    // Use self-healing wrapper that auto-installs deps if missing
+    const wrapperPath = path.join(process.cwd(), 'run_analysis.sh')
 
     // Set environment variables for the subprocess
     const env = {
@@ -45,9 +46,9 @@ function runYoloAnalysis(videoPath: string): Promise<SpikeAnalysis> {
       YOLO_CONFIG_DIR: '/tmp/Ultralytics',
     }
 
-    const child = execFile('python3', [scriptPath, videoPath], {
+    const child = execFile('bash', [wrapperPath, videoPath], {
       env,
-      timeout: 180_000, // 3 minute timeout
+      timeout: 300_000, // 5 minute timeout (first run may need to install deps)
       maxBuffer: 10 * 1024 * 1024, // 10MB buffer for JSON output
       cwd: process.cwd(),
     }, (err, stdout, stderr) => {
@@ -270,7 +271,7 @@ export async function POST(request: NextRequest) {
         console.log(`[SpikeLab] [${jobId}] Analyzing video with YOLOv8: ${videoName} (${(videoSize / 1024 / 1024).toFixed(1)}MB)`)
 
         // Step 1: YOLOv8 Pose Analysis
-        updateJob(jobId, { step: 'analyzing', message: 'Running YOLOv8 pose estimation on video frames...', percent: 15 })
+        updateJob(jobId, { step: 'analyzing', message: 'Preparing AI model... (first run may take a minute to set up)', percent: 10 })
 
         const analysis = await runYoloAnalysis(videoPath)
 

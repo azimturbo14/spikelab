@@ -132,9 +132,9 @@ export default function SpikeApp() {
       if (!jobId) throw new Error(t().errors.unexpectedFormat)
       console.log('[SpikeLab Client] Job started:', jobId)
 
-      const POLL_INTERVAL = 2000
+      const POLL_INTERVAL = 3000
       let attempts = 0
-      const MAX_ATTEMPTS = 90
+      const MAX_ATTEMPTS = 120 // 6 minutes max (first run may install deps)
 
       while (attempts < MAX_ATTEMPTS) {
         await new Promise(r => setTimeout(r, POLL_INTERVAL))
