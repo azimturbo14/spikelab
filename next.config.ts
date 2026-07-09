@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  turbopack: {},
+  serverExternalPackages: ['onnxruntime-node'],
 };
 
 export default nextConfig;

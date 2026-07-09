@@ -24,6 +24,7 @@ import {
   type PlayerProfile,
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
+import { analyzeVideoInBrowser } from '@/lib/yolo-browser'
 
 type TabState = 'upload' | 'analysis' | 'training'
 
@@ -101,94 +102,26 @@ export default function SpikeApp() {
     setProgressMsg('')
     setProgressPct(0)
 
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 300_000)
-
     try {
-      const formData = new FormData()
-      formData.append('video', videoFile)
-      formData.append('name', profile.name)
-      formData.append('position', profile.position)
-      formData.append('experience', profile.experience)
+      console.log('[SpikeLab Client] Starting browser-based YOLOv8 analysis...')
 
-      console.log('[SpikeLab Client] Uploading video...')
-      const uploadRes = await fetch('/api/analyze-spike', {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
+      const result = await analyzeVideoInBrowser(videoFile, (msg: string, pct: number) => {
+        setProgressMsg(msg)
+        setProgressPct(pct)
+        if (pct < 20) setProgressStep('starting')
+        else if (pct < 60) setProgressStep('analyzing')
+        else if (pct < 90) setProgressStep('generating')
+        else setProgressStep('finalizing')
       })
 
-      if (!uploadRes.ok) {
-        let errMsg = t().errors.analysisFailed
-        try {
-          const errData = await uploadRes.json()
-          errMsg = errData.error || errMsg
-        } catch { /* response wasn't JSON */ }
-        console.error('[SpikeLab Client] Upload error:', uploadRes.status, errMsg)
-        throw new Error(errMsg)
-      }
-
-      const { jobId } = await uploadRes.json() as { jobId: string }
-      if (!jobId) throw new Error(t().errors.unexpectedFormat)
-      console.log('[SpikeLab Client] Job started:', jobId)
-
-      const POLL_INTERVAL = 3000
-      let attempts = 0
-      const MAX_ATTEMPTS = 120 // 6 minutes max (first run may install deps)
-
-      while (attempts < MAX_ATTEMPTS) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL))
-        attempts++
-
-        const statusRes = await fetch(`/api/analyze-status?jobId=${encodeURIComponent(jobId)}`, {
-          signal: controller.signal,
-        })
-
-        if (!statusRes.ok) {
-          console.warn(`[SpikeLab Client] Status poll ${attempts} failed: ${statusRes.status}`)
-          continue
-        }
-
-        const status = await statusRes.json() as {
-          status: string; step: string; message: string; percent: number;
-          analysis?: unknown; error?: string
-        }
-
-        console.log('[SpikeLab Client] Poll', attempts, ':', status.status, status.step, status.percent + '%')
-
-        if (status.message) setProgressMsg(status.message)
-        if (typeof status.percent === 'number') setProgressPct(status.percent)
-        if (status.step) setProgressStep(status.step)
-
-        if (status.status === 'done' && status.analysis) {
-          const analysisData = status.analysis as Record<string, unknown>
-          if (!analysisData?.scores || !analysisData?.phaseAnalysis) {
-            console.error('[SpikeLab Client] Invalid analysis data')
-            throw new Error(t().errors.unexpectedFormat)
-          }
-          console.log('[SpikeLab Client] Analysis complete, switching tab')
-          setAnalysis(status.analysis as SpikeAnalysis)
-          setActiveTab('analysis')
-          return
-        }
-
-        if (status.status === 'error') {
-          throw new Error(status.error || t().errors.somethingWentWrong)
-        }
-      }
-
-      throw new Error(t().errors.timeout)
+      console.log('[SpikeLab Client] Analysis complete, switching tab')
+      setAnalysis(result)
+      setActiveTab('analysis')
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        console.error('[SpikeLab Client] Request timed out')
-        setError(t().errors.timeout)
-      } else {
-        const msg = err instanceof Error ? err.message : t().errors.somethingWentWrong
-        console.error('[SpikeLab Client] Analysis error:', msg, err)
-        setError(msg)
-      }
+      const msg = err instanceof Error ? err.message : t().errors.somethingWentWrong
+      console.error('[SpikeLab Client] Analysis error:', msg, err)
+      setError(msg)
     } finally {
-      clearTimeout(timeoutId)
       setIsAnalyzing(false)
       setProgressStep('')
       setProgressMsg('')
