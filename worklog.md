@@ -170,3 +170,117 @@ Stage Summary:
 - Fix: Installed all required dependencies via pip3
 - Analysis pipeline now works: video upload → YOLOv8 pose estimation → biomechanical scores → JSON response
 - Note: Python dependencies installed in system venv at /home/z/.venv - may need re-installation if environment changes
+
+---
+Task ID: 2
+Agent: general-purpose
+Task: Improve analysis accuracy and add airborne body position analysis
+
+Work Log:
+- Read and analyzed all 16 calc* scoring functions in spike-analyzer.ts
+- Added `kpConf()` and `avgKpConf()` helper functions for keypoint confidence checking
+- Improved calcApproachSpeed: normalized by personHeight (1.5-3.5 body-heights/sec), added confidence gate
+- Improved calcApproachAngle: adjusted optimal range to 25-50°, added min dx guard and confidence check
+- Improved calcLastStepLength: more robust step detection with confidence-validated ankle keypoints
+- Improved calcFootworkRhythm: per-side foot plant detection, better acceleration scoring
+- Improved calcArmsSwingBack: added wrist-behind-hip check (45% of score), proper handedness support
+- Improved calcVerticalJumpConversion: better jump ratio thresholds (0.55+ = elite), horizontal speed conversion bonus
+- Improved calcHipShoulderRotation: searches across full airborne phase for best-confidence frame
+- CRITICAL: Rewrote calcBodyPositionAir with 6 specific elements: knee tuck, hip alignment, shoulder position, non-hitting arm extension, head position, body arch. Only analyzes airborne phase (plant→contact), finds best frame near peak
+- Enhanced calcTorsoAngleAir: proper early/late airborne split, contact-frame-specific angle check, smooth transition scoring
+- Improved calcBowAndArrow: searches plant→contact, 4 sub-scores (arm cock, wrist dist, elbow high, wrist above)
+- Improved calcArmSwingSpeed: focuses on swing phase only, confidence check, better normalized thresholds
+- Improved calcContactPoint: 3 sub-scores (arm extension 45%, height timing 35%, wrist position 20%)
+- Improved calcWristSnap: focused on contact±2 to contact+5 frames, weighted near-contact angular velocity
+- Improved calcContactHeight: wrist-above-head bonus, tighter peak search window (±3 frames)
+- Improved calcFollowThrough: directional midline crossing, below-waist bonus
+- Improved calcLandingBalance: 4 sub-scores (knee bend 45%, hip level 25%, two-footed 20%, shoulder-over-hip 10%)
+- Enhanced jump phase feedback with specific body_position_air and torso_angle_air messages
+- Replaced flat confidence system with per-metric keypoint-based confidence (metricKpMap)
+- Replaced naive checkpointPhaseMap with metric-specific frame ranges for accurate frame navigation UI
+- All functions return [0, 0] when keypoint confidence is too low
+
+Stage Summary:
+- All 16 scoring metrics improved with height normalization and confidence gating
+- Airborne body position analysis checks 6 specific elements with individual scoring
+- Torso angle analysis detects whip transition (10-25° back → 0-10° forward at contact)
+- Per-metric confidence calculated from actual keypoint quality in relevant frames
+- Each metric maps to its specific frame range for the checkpoint navigation UI
+- TypeScript compiles cleanly (only pre-existing analysisMethod type error)
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix 'e.x is not a function' runtime error
+
+Work Log:
+- Identified root cause: CDN dynamic import of onnxruntime-web UMD module fails because ESM dynamic import doesn't properly expose the ort namespace
+- Copied onnxruntime-web v1.21.0 dist files (ort.all.min.mjs + WASM) to public/ort/
+- Created public/ort/ort-loader.mjs that imports the ESM module and sets globalThis.ort
+- Rewrote getOrtSession() to use script tag injection + 'ort-ready' event pattern
+- Removed all TypeScript import('onnxruntime-web') references to prevent Turbopack from trying to bundle WASM
+- Removed onnxruntime-web from node_modules (was causing OOM crashes) and serverExternalPackages
+- Added public/ort/** to eslint ignores
+
+Stage Summary:
+- ONNX runtime now loads via public/ort/ort-loader.mjs (script tag) → globalThis.ort
+- WASM files served from /ort/ directory (ort-wasm-simd-threaded.wasm)
+- No bundler involvement in ONNX loading - completely bypasses Turbopack/webpack
+
+---
+Task ID: 2
+Agent: general-purpose subagent
+Task: Improve analysis accuracy and add airborne body position analysis
+
+Work Log:
+- Read and analyzed all 16 calc* scoring functions
+- Added kpConf() and avgKpConf() helper functions for robust keypoint confidence checking
+- Normalized all distance-based metrics by person height
+- Added confidence gating to all scoring functions (return [0, 0] when keypoints unreliable)
+- Complete rewrite of calcBodyPositionAir with 6 elements: knee tuck, hip alignment, shoulder position, non-hitting arm, head position, body arch
+- Enhanced calcTorsoAngleAir with early/late airborne phase split and whip transition detection
+- Replaced flat confidence with per-metric confidence using metricKpMap
+- Fixed checkpointFrames to map each metric to its specific relevant frame range
+
+Stage Summary:
+- All 16 metrics now height-normalized with confidence gating
+- Airborne body position checks 6 biomechanical elements
+- Torso angle detects arch-to-whip transition
+- Each metric maps to accurate frame ranges
+
+---
+Task ID: 3
+Agent: Main Agent
+Task: Add frame navigation UI under each critique with arrow icons
+
+Work Log:
+- Created InlineFrameNav component (compact frame navigator with left/right arrows, dots, timestamp)
+- Updated AnalysisView to show InlineFrameNav under:
+  1. Phase cards (for phases with score < 75, showing weakest 2 checkpoints per phase)
+  2. Each checkpoint in Detailed Checkpoint Scores (for scores < 75 with frames)
+  3. Each weakness in topWeaknesses list
+- Each critique only displays frames relevant to that specific issue (via checkpointFrames mapping)
+- Added phase.specificFix display in phase cards
+- Kept existing FrameCarousel for phase gallery section at bottom
+
+Stage Summary:
+- InlineFrameNav shows under every low-scored critique with relevant frames only
+- Left/right arrow icons for frame navigation with disabled states
+- Dot indicators and frame counter
+- Compact design fits inline with feedback text
+
+---
+Task ID: 4
+Agent: Main Agent
+Task: Change dark mode theme color
+
+Work Log:
+- Updated .dark CSS variables in globals.css
+- Shifted hue from 255 (blue) to 250 (slightly warmer dark blue)
+- Reduced chroma for subtler dark tones
+- Adjusted primary from 192 to 185 hue for richer teal
+- Darkened card/muted surfaces slightly for better contrast
+
+Stage Summary:
+- Dark mode now has richer, warmer dark tones with better contrast
+- Primary teal color is slightly more vibrant (higher chroma)

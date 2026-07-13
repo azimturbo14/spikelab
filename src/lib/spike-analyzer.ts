@@ -101,20 +101,45 @@ function movingAverage(arr: number[], window: number): number[] {
 
 // ─── ONNX Session (lazy singleton) ────────────────────────────────────────────
 
-let ortModule: typeof import('onnxruntime-web') | null = null
 let sessionPromise: Promise<unknown> | null = null
 
 async function getOrtSession() {
   if (sessionPromise) return sessionPromise
 
   sessionPromise = (async () => {
-    // Load onnxruntime-web from CDN to avoid WASM bundling issues with Turbopack
-    if (!ortModule) {
-      const mod = await import('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js')
-      ortModule = mod as unknown as typeof import('onnxruntime-web')
-    }
+    // Load onnxruntime-web via a loader module script from public/ort/
+    // to completely bypass Turbopack/webpack bundling of WASM files.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ort = await new Promise<any>((resolve, reject) => {
+      // Already loaded?
+      if ((globalThis as any).ort) { resolve((globalThis as any).ort); return }
 
-    const session = await ortModule.InferenceSession.create('/models/yolov8n-pose.onnx', {
+      const onReady = () => {
+        globalThis.removeEventListener('ort-ready', onReady)
+        resolve((globalThis as any).ort)
+      }
+      globalThis.addEventListener('ort-ready', onReady)
+
+      // Check again after a tick (race condition guard)
+      const s = document.createElement('script')
+      s.type = 'module'
+      s.src = '/ort/ort-loader.mjs'
+      s.onerror = () => {
+        globalThis.removeEventListener('ort-ready', onReady)
+        reject(new Error('Failed to load ONNX Runtime. Please refresh the page.'))
+      }
+      document.head.appendChild(s)
+
+      // Timeout safety
+      setTimeout(() => {
+        if (!(globalThis as any).ort) {
+          globalThis.removeEventListener('ort-ready', onReady)
+          reject(new Error('ONNX Runtime load timed out. Please refresh the page.'))
+        }
+      }, 30000)
+    })
+
+    const session = await ort.InferenceSession.create('/models/yolov8n-pose.onnx', {
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all',
     })
@@ -286,7 +311,7 @@ async function runInference(
   videoHeight: number,
   onProgress: ProgressCallback
 ): Promise<FrameData[]> {
-  const session = await getOrtSession() as import('onnxruntime-web').InferenceSession
+  const session = await getOrtSession() as any
   const inputName = session.inputNames[0]
 
   const allFramesData: FrameData[] = []
@@ -310,7 +335,7 @@ async function runInference(
       float32Data[2 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE + p] = imgData.data[p * 4 + 2] / 255.0  // B
     }
 
-    const inputTensor = new ortModule.Tensor('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE])
+    const inputTensor = new ((globalThis as any).ort.Tensor)('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE])
     const feeds = { [inputName]: inputTensor }
 
     try {
@@ -658,29 +683,62 @@ function detectPhases(frames: FrameData[], fps: number, isLeftHanded: boolean): 
   }
 }
 
+// ─── Keypoint Confidence Helpers ─────────────────────────────────────────────
+
+/** Check if all specified keypoints in a frame meet minimum confidence */
+function kpConf(kp: Keypoint[], indices: number[], minConf = 0.3): boolean {
+  return indices.every(i => kp[i].conf >= minConf)
+}
+
+/** Average confidence of specific keypoints across a frame range */
+function avgKpConf(frames: FrameData[], start: number, end: number, kpIndices: number[]): number {
+ let total = 0, count = 0
+  for (let i = start; i <= Math.min(end, frames.length - 1); i++) {
+    for (const ki of kpIndices) {
+      total += frames[i].keypoints[ki].conf
+      count++
+    }
+  }
+  return count > 0 ? total / count : 0
+}
+
 // ─── Biomechanical Scoring (16 Metrics) ───────────────────────────────────────
+// All distances normalized by personHeight. If keypoint confidence is too low,
+// the function returns [0, 0] to signal unreliable data.
 
 function calcApproachSpeed(frames: FrameData[], phases: PhaseInfo, fps: number): [number, number] {
   const xs = (phases.hipXs.slice(phases.approachStart, phases.approachEnd + 1) as number[])
-  if (xs.length < 2) return [50, 0]
+  if (xs.length < 2) return [0, 0]
+
+  // Require sufficient hip keypoint confidence during approach
+  const approachConf = avgKpConf(frames, phases.approachStart, phases.approachEnd, [L_HIP, R_HIP])
+  if (approachConf < 0.25) return [0, 0]
 
   const totalDist = Math.abs(xs[xs.length - 1] - xs[0])
   const dt = xs.length / fps
-  const speed = dt > 0 ? totalDist / dt : 0
+  const rawSpeed = dt > 0 ? totalDist / dt : 0
+
+  // Normalize by person height (real approach ~1.5-3.5 body-heights/sec)
+  const normSpeed = phases.personHeight > 0 ? rawSpeed / phases.personHeight : 0
 
   let score: number
-  if (speed > 300) score = 92
-  else if (speed > 200) score = 70 + (speed - 200) / 100 * 22
-  else if (speed > 100) score = 45 + (speed - 100) / 100 * 25
-  else score = 20 + speed / 100 * 25
+  if (normSpeed > 3.0) score = 92
+  else if (normSpeed > 2.0) score = 72 + (normSpeed - 2.0) / 1.0 * 20
+  else if (normSpeed > 1.0) score = 48 + (normSpeed - 1.0) / 1.0 * 24
+  else if (normSpeed > 0.4) score = 25 + (normSpeed - 0.4) / 0.6 * 23
+  else score = 15 + normSpeed / 0.4 * 10
 
-  return [clamp(score), Math.round(speed * 100) / 100]
+  return [clamp(score), Math.round(normSpeed * 100) / 100]
 }
 
 function calcApproachAngle(frames: FrameData[], phases: PhaseInfo): [number, number] {
   const asStart = phases.approachStart
   const plant = phases.plantFrame
-  if (plant <= asStart) return [50, 0]
+  if (plant <= asStart) return [0, 0]
+
+  // Confidence check
+  const conf = avgKpConf(frames, asStart, plant, [L_HIP, R_HIP])
+  if (conf < 0.25) return [0, 0]
 
   const startX = (phases.hipXs[asStart] ?? 0) as number
   const startY = phases.hipYs[asStart]
@@ -689,10 +747,16 @@ function calcApproachAngle(frames: FrameData[], phases: PhaseInfo): [number, num
 
   const dx = Math.abs(plantX - startX)
   const dy = Math.abs(plantY - startY)
+  if (dx < 5) return [0, 0] // Not enough horizontal movement to measure angle
+
+  // Y is inverted in screen coords but we use abs, so the angle magnitude
+  // from horizontal is correct regardless of camera orientation.
   const angle = Math.atan2(dy, dx) * (180 / Math.PI)
 
-  let score = scoreBand(angle, 45, 60, 0)
-  if (angle > 75) score = clamp(score - 15)
+  // Optimal approach angle: 25-50° from horizontal (diagonal approach to net)
+  let score = scoreBand(angle, 25, 50, 0)
+  if (angle > 65) score = clamp(score - 20) // Too steep
+  if (angle < 12) score = clamp(score - 15) // Too straight
 
   return [clamp(score), Math.round(angle * 10) / 10]
 }
@@ -701,33 +765,55 @@ function calcLastStepLength(frames: FrameData[], phases: PhaseInfo): [number, nu
   const plant = phases.plantFrame
   const legLen = phases.legLength
   const n = frames.length
+  if (legLen < 50) return [0, 0]
 
+  // Search backward from plant for ankle positions
   const anklePositions: [number, { x: number; y: number }][] = []
   for (let i = plant; i >= Math.max(0, plant - Math.floor(n * 0.3)); i--) {
     const kp = frames[i].keypoints
-    if (kp[L_ANKLE].conf > 0.3 && kp[R_ANKLE].conf > 0.3) {
+    if (kpConf(kp, [L_ANKLE, R_ANKLE], 0.3)) {
       anklePositions.push([i, midpoint(kp[L_ANKLE], kp[R_ANKLE])])
-      if (anklePositions.length >= 10) break
+      if (anklePositions.length >= 15) break
     }
   }
 
-  if (anklePositions.length < 2) return [50, 0]
+  if (anklePositions.length < 2) return [0, 0]
 
-  // Find step positions
-  const steps = [anklePositions[0]]
+  // Confidence: check ankle keypoints in the last few frames before plant
+  const lastFew = anklePositions.slice(-5)
+ let confSum = 0, confCount = 0
+  for (const [fi] of lastFew) {
+    confSum += frames[fi].keypoints[L_ANKLE].conf + frames[fi].keypoints[R_ANKLE].conf
+    confCount += 2
+  }
+  if (confCount > 0 && confSum / confCount < 0.2) return [0, 0]
+
+  // Detect foot plants (local maxima in Y = foot on ground)
+  const yVals = anklePositions.map(a => a[1].y)
+  const steps: [number, { x: number; y: number }][] = [anklePositions[0]]
+
   for (let i = 1; i < anklePositions.length; i++) {
     const prev = steps[steps.length - 1][1]
     const cur = anklePositions[i][1]
-    if (dist(prev, cur) > legLen * 0.15) {
+    if (dist(prev, cur) > legLen * 0.12) {
       steps.push(anklePositions[i])
     }
   }
 
-  if (steps.length < 2) return [50, 0]
+  if (steps.length < 2) return [0, 0]
 
-  const stepLen = dist(steps[steps.length - 2][1], steps[steps.length - 1][1])
-  const ratio = legLen > 0 ? stepLen / legLen : 0
-  const score = scoreBand(ratio, 0.8, 1.2, 0)
+  // Find the last step (largest stride near plant)
+  let lastStepLen = 0
+  for (let i = Math.max(1, steps.length - 3); i < steps.length; i++) {
+    const d = dist(steps[i][1], steps[i - 1][1])
+    if (d > lastStepLen) lastStepLen = d
+  }
+
+  if (lastStepLen === 0) return [0, 0]
+
+  const ratio = lastStepLen / legLen
+  // Optimal last step: 0.8-1.3x leg length (long, braking step)
+  const score = scoreBand(ratio, 0.8, 1.3, 0)
 
   return [clamp(score), Math.round(ratio * 1000) / 1000]
 }
@@ -735,150 +821,199 @@ function calcLastStepLength(frames: FrameData[], phases: PhaseInfo): [number, nu
 function calcFootworkRhythm(frames: FrameData[], phases: PhaseInfo, fps: number): [number, number] {
   const plant = phases.plantFrame
   const n = frames.length
+  if (fps <= 0) return [0, 0]
 
-  const ankleYs: [number, number][] = []
-  const searchStart = Math.max(0, plant - Math.floor(fps * 2))
+  // Confidence check
+  const conf = avgKpConf(frames, Math.max(0, plant - Math.floor(fps * 2.5)), plant, [L_ANKLE, R_ANKLE])
+  if (conf < 0.2) return [0, 0]
+
+  // Collect per-side ankle Y positions for plant detection
+  const searchStart = Math.max(0, plant - Math.floor(fps * 2.5))
+  const ankleData: [number, number, number][] = [] // [frameIdx, leftAnkleY, rightAnkleY]
   for (let i = searchStart; i <= plant && i < n; i++) {
     const kp = frames[i].keypoints
-    if (kp[L_ANKLE].conf > 0.3 && kp[R_ANKLE].conf > 0.3) {
-      ankleYs.push([i, Math.min(kp[L_ANKLE].y, kp[R_ANKLE].y)])
-    } else if (kp[L_ANKLE].conf > 0.3) {
-      ankleYs.push([i, kp[L_ANKLE].y])
-    } else if (kp[R_ANKLE].conf > 0.3) {
-      ankleYs.push([i, kp[R_ANKLE].y])
-    }
+    const ly = kp[L_ANKLE].conf > 0.3 ? kp[L_ANKLE].y : NaN
+    const ry = kp[R_ANKLE].conf > 0.3 ? kp[R_ANKLE].y : NaN
+    if (!isNaN(ly) || !isNaN(ry)) ankleData.push([i, ly, ry])
   }
 
-  if (ankleYs.length < 3) return [50, 0]
+  if (ankleData.length < 4) return [0, 0]
 
-  const yVals = ankleYs.map(a => a[1])
-  const smoothed = movingAverage(yVals, 3)
-  const meanY = smoothed.reduce((a, b) => a + b, 0) / smoothed.length
-
-  // Find foot plant events (local maxima in y = foot on ground)
+  // Detect foot plants from each side independently
   const plants: number[] = []
-  for (let i = 1; i < smoothed.length - 1; i++) {
-    if (smoothed[i] >= smoothed[i - 1] && smoothed[i] >= smoothed[i + 1] && smoothed[i] > meanY - 5) {
-      plants.push(ankleYs[i][0])
+  for (let side = 0; side < 2; side++) {
+    const yArr: number[] = []
+    const fArr: number[] = []
+    for (const [fi, ly, ry] of ankleData) {
+      const v = side === 0 ? ly : ry
+      if (!isNaN(v)) { yArr.push(v); fArr.push(fi) }
+    }
+    if (yArr.length < 3) continue
+    const smoothed = movingAverage(yArr, 3)
+    const meanY = smoothed.reduce((a, b) => a + b, 0) / smoothed.length
+    for (let i = 1; i < smoothed.length - 1; i++) {
+      if (smoothed[i] >= smoothed[i - 1] - 1 && smoothed[i] >= smoothed[i + 1] - 1 && smoothed[i] > meanY - 8) {
+        if (!plants.includes(fArr[i])) plants.push(fArr[i])
+      }
     }
   }
+  plants.sort((a, b) => a - b)
 
-  if (plants.length < 2) return [50, 0]
+  if (plants.length < 2) return [0, 0]
 
   const intervals: number[] = []
   for (let i = 1; i < plants.length; i++) {
     const dt = (plants[i] - plants[i - 1]) / fps
-    if (dt > 0.05) intervals.push(dt)
+    if (dt > 0.08 && dt < 1.5) intervals.push(dt)
   }
 
-  if (intervals.length < 2) return [50, 0]
+  if (intervals.length < 1) return [0, 0]
 
-  // Acceleration pattern (slow-to-fast = intervals get shorter)
+  // Acceleration pattern: slow-to-fast = intervals should decrease
   let accScore = 50
-  const ratios: number[] = []
-  for (let i = 0; i < intervals.length - 1; i++) {
-    if (intervals[i + 1] > 0) ratios.push(intervals[i] / intervals[i + 1])
-  }
-  if (ratios.length > 0) {
-    const avgRatio = ratios.reduce((a, b) => a + b, 0) / ratios.length
-    if (avgRatio > 1.3) accScore = 85
-    else if (avgRatio > 1.1) accScore = 75
-    else if (avgRatio > 0.9) accScore = 60
-    else accScore = 35
+  if (intervals.length >= 2) {
+    let decreasing = 0
+    for (let i = 1; i < intervals.length; i++) {
+      if (intervals[i] < intervals[i - 1]) decreasing++
+    }
+    const decRatio = decreasing / (intervals.length - 1)
+    accScore = 30 + decRatio * 60
   }
 
-  const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length
-  const std = Math.sqrt(intervals.reduce((s, v) => s + (v - mean) ** 2, 0) / intervals.length)
-  const cv = mean > 0 ? std / mean : 0
-  const consScore = Math.max(30, Math.round(90 - cv * 200))
+  // Consistency: coefficient of variation
+  if (intervals.length >= 2) {
+    const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length
+    const std = Math.sqrt(intervals.reduce((s, v) => s + (v - mean) ** 2, 0) / intervals.length)
+    const cv = mean > 0 ? std / mean : 0
+    const consScore = Math.max(30, Math.round(90 - cv * 200))
+    accScore = accScore * 0.6 + consScore * 0.4
+  }
 
-  const score = accScore * 0.6 + consScore * 0.4
-  return [clamp(score), Math.round(mean * 1000) / 1000]
+  const meanInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
+  return [clamp(accScore), Math.round(meanInterval * 1000) / 1000]
 }
 
 function calcArmsSwingBack(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
   const offShoulder = isLeftHanded ? R_SHOULDER : L_SHOULDER
+  const offElbow = isLeftHanded ? R_ELBOW : L_ELBOW
   const offWrist = isLeftHanded ? R_WRIST : L_WRIST
 
-  let maxAngle = 0; let count = 0
+  // Confidence check
+  const conf = avgKpConf(frames, phases.approachStart, phases.plantFrame, [offShoulder, offWrist, L_HIP, R_HIP])
+  if (conf < 0.2) return [0, 0]
+
+  let maxAngle = 0
+  let maxWristBehind = 0
+  let count = 0
+
   for (let i = phases.approachStart; i <= Math.min(phases.plantFrame, frames.length - 1); i++) {
     const kp = frames[i].keypoints
-    if (kp[offShoulder].conf < 0.3 || kp[offWrist].conf < 0.3) continue
-    if (kp[L_HIP].conf < 0.3 || kp[R_HIP].conf < 0.3) continue
+    if (!kpConf(kp, [offShoulder, offWrist, L_HIP, R_HIP], 0.3)) continue
 
     const hipC = midpoint(kp[L_HIP], kp[R_HIP])
-    const angle = angleBetween(hipC, kp[offShoulder], kp[offWrist])
-    maxAngle = Math.max(maxAngle, angle)
+
+    // 1. Arm extension angle at shoulder
+    const armAngle = kpConf(kp, [offElbow], 0.3)
+      ? angleBetween(kp[offShoulder], kp[offElbow], kp[offWrist])
+      : 120 // fallback if elbow not visible
+    maxAngle = Math.max(maxAngle, armAngle)
+
+    // 2. Wrist behind hip center (arms swing back PAST hips)
+    const hipX = hipC.x
+    const wristBehind = (isLeftHanded
+      ? (kp[offWrist].x > hipX)   // left-handed: wrist to the right of hip
+      : (kp[offWrist].x < hipX))  // right-handed: wrist to the left of hip
+      ? Math.abs(kp[offWrist].x - hipX)
+      : 0
+    const normBehind = phases.personHeight > 0 ? wristBehind / phases.personHeight : 0
+    maxWristBehind = Math.max(maxWristBehind, normBehind)
     count++
   }
 
-  if (count === 0) return [50, 0]
+  if (count === 0) return [0, 0]
 
-  let score: number
-  if (maxAngle > 150) score = 92
-  else if (maxAngle > 120) score = 78
-  else if (maxAngle > 90) score = 60
-  else if (maxAngle > 60) score = 40
-  else score = 25
+  // Score: arm extension (55%) + wrist behind body (45%)
+  let angleScore: number
+  if (maxAngle > 150) angleScore = 95
+  else if (maxAngle > 120) angleScore = 80
+  else if (maxAngle > 90) angleScore = 60
+  else if (maxAngle > 60) angleScore = 40
+  else angleScore = 20
 
+  let behindScore: number
+  if (maxWristBehind > 0.15) behindScore = 95
+  else if (maxWristBehind > 0.08) behindScore = 75
+  else if (maxWristBehind > 0.03) behindScore = 55
+  else behindScore = 30
+
+  const score = angleScore * 0.55 + behindScore * 0.45
   return [clamp(score), Math.round(maxAngle * 10) / 10]
 }
 
 function calcVerticalJumpConversion(frames: FrameData[], phases: PhaseInfo, fps: number): [number, number] {
   const plant = phases.plantFrame
   const peak = phases.jumpPeak
-  if (peak <= plant) return [50, 0]
+  if (peak <= plant) return [0, 0]
 
-  const vertDisp = phases.hipYs[plant] - phases.hipYs[peak] // positive = upward
+  const conf = avgKpConf(frames, plant, peak, [L_HIP, R_HIP])
+  if (conf < 0.2) return [0, 0]
+
   const personHeight = phases.personHeight
-  const jumpRatio = personHeight > 0 ? vertDisp / personHeight : 0
+  if (personHeight < 50) return [0, 0]
 
-  // Horizontal speed at plant
-  const window = Math.max(1, Math.floor(fps * 0.2))
-  const horizSpeeds: number[] = []
-  for (let i = Math.max(0, plant - window); i < plant; i++) {
-    const x1 = phases.hipXs[i]
-    const x2 = phases.hipXs[i + 1]
-    if (x1 !== null && x2 !== null) {
-      horizSpeeds.push(Math.abs(x2 - x1) * fps)
-    }
-  }
-  const avgHS = horizSpeeds.length > 0 ? horizSpeeds.reduce((a, b) => a + b, 0) / horizSpeeds.length : 0
+  // Vertical displacement (positive = upward since Y is inverted)
+  const vertDisp = phases.hipYs[plant] - phases.hipYs[peak]
+  const jumpRatio = vertDisp / personHeight
 
+  // Real volleyball spike jump: 0.3-0.6 body heights; elite 0.5+
   let score: number
-  if (jumpRatio > 0.8) score = 90
-  else if (jumpRatio > 0.5) score = 72
-  else if (jumpRatio > 0.3) score = 55
-  else if (jumpRatio > 0.15) score = 40
+  if (jumpRatio > 0.55) score = 95
+  else if (jumpRatio > 0.40) score = 82
+  else if (jumpRatio > 0.25) score = 65
+  else if (jumpRatio > 0.12) score = 45
   else score = 25
 
-  if (avgHS > 10 && vertDisp / avgHS > 0.3) score = Math.min(100, score + 5)
+  // Bonus: horizontal speed should decrease at peak (converted to vertical)
+  const window = Math.max(1, Math.floor(fps * 0.15))
+  const preSpeeds: number[] = []
+  const postSpeeds: number[] = []
+  for (let i = Math.max(0, plant - window); i < plant && i < frames.length - 1; i++) {
+    const x1 = phases.hipXs[i]; const x2 = phases.hipXs[i + 1]
+    if (x1 !== null && x2 !== null) preSpeeds.push(Math.abs(x2 - x1) * fps)
+  }
+  for (let i = peak; i < Math.min(frames.length - 1, peak + window); i++) {
+    const x1 = phases.hipXs[i]; const x2 = phases.hipXs[i + 1]
+    if (x1 !== null && x2 !== null) postSpeeds.push(Math.abs(x2 - x1) * fps)
+  }
+  const avgPre = preSpeeds.length > 0 ? preSpeeds.reduce((a, b) => a + b, 0) / preSpeeds.length : 0
+  const avgPost = postSpeeds.length > 0 ? postSpeeds.reduce((a, b) => a + b, 0) / postSpeeds.length : 0
+  if (avgPre > 10 && avgPre > avgPost * 1.5) score = Math.min(100, score + 5)
 
   return [clamp(score), Math.round(jumpRatio * 1000) / 1000]
 }
 
 function calcHipShoulderRotation(frames: FrameData[], phases: PhaseInfo): [number, number] {
   const n = frames.length
-  let peak = Math.min(phases.jumpPeak, n - 1)
-  const kp = frames[peak].keypoints
+  const personHeight = phases.personHeight
 
-  // If key points not visible at peak, search nearby
-  if (kp[L_SHOULDER].conf < 0.3 || kp[R_SHOULDER].conf < 0.3 ||
-      kp[L_HIP].conf < 0.3 || kp[R_HIP].conf < 0.3) {
-    for (let offset = 1; offset < 10; offset++) {
-      for (const p of [peak - offset, peak + offset]) {
-        if (p >= 0 && p < n) {
-          const k = frames[p].keypoints
-          if (k[L_SHOULDER].conf > 0.3 && k[R_SHOULDER].conf > 0.3 &&
-              k[L_HIP].conf > 0.3 && k[R_HIP].conf > 0.3) {
-            peak = p; break
-          }
-        }
-      }
+  // Search across the airborne phase for the best frame with visible keypoints
+  const airStart = Math.max(0, phases.plantFrame)
+  const airEnd = Math.min(n - 1, phases.contactFrame)
+
+  let bestFrame = -1
+  let bestDetConf = 0
+  for (let i = airStart; i <= airEnd; i++) {
+    const kp = frames[i].keypoints
+    const conf = (kp[L_SHOULDER].conf + kp[R_SHOULDER].conf + kp[L_HIP].conf + kp[R_HIP].conf) / 4
+    if (conf >= 0.3 && conf > bestDetConf) {
+      bestDetConf = conf
+      bestFrame = i
     }
   }
 
-  const fkp = frames[peak].keypoints
+  if (bestFrame < 0 || bestDetConf < 0.25) return [0, 0]
+
+  const fkp = frames[bestFrame].keypoints
   const sAngle = angleOfLine(fkp[L_SHOULDER], fkp[R_SHOULDER])
   const hAngle = angleOfLine(fkp[L_HIP], fkp[R_HIP])
   let rotation = Math.abs(sAngle - hAngle)
@@ -893,148 +1028,208 @@ function calcHipShoulderRotation(frames: FrameData[], phases: PhaseInfo): [numbe
   return [clamp(score), Math.round(rotation * 10) / 10]
 }
 
-function calcBodyPositionAir(frames: FrameData[], phases: PhaseInfo): [number, number] {
+function calcBodyPositionAir(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
   const n = frames.length
-  const peak = phases.jumpPeak
   const personHeight = phases.personHeight
-  let bestScore = 0, bestAngle = 0
+  const airStart = phases.plantFrame
+  const airEnd = Math.min(n - 1, phases.contactFrame)
 
-  for (let p = Math.max(0, peak - 3); p < Math.min(n, peak + 4); p++) {
-    const kp = frames[p].keypoints
-    if (kp[L_SHOULDER].conf < 0.3 || kp[R_SHOULDER].conf < 0.3) continue
-    if (kp[L_HIP].conf < 0.3 || kp[R_HIP].conf < 0.3) continue
-    if (kp[L_KNEE].conf < 0.3 && kp[R_KNEE].conf < 0.3) continue
+  if (personHeight < 50 || airEnd <= airStart) return [0, 0]
 
-    const shoulderC = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
-    const hipC = midpoint(kp[L_HIP], kp[R_HIP])
-
-    let s = 0
-
-    // 1. Torso vertical alignment (shoulder-hip angle from vertical)
-    let torsoAngle = Math.abs(angleOfLine(shoulderC, hipC) - 90)
-    if (torsoAngle > 90) torsoAngle = 180 - torsoAngle
-    // Slight lean back (5-25°) is ideal for loading the hit
-    if (torsoAngle >= 5 && torsoAngle <= 25) s += 25
-    else if (torsoAngle <= 40) s += 15
-    else s += 5
-
-    // 2. Knee tuck — both knees should show some bend for athletic position
-    let kneeScore = 0
-    const kneeAngles: number[] = []
-    for (const [hipI, kneeI, ankleI] of [[L_HIP, L_KNEE, L_ANKLE], [R_HIP, R_KNEE, R_ANKLE]]) {
-      if (kp[kneeI].conf > 0.3 && kp[ankleI].conf > 0.3 && kp[hipI].conf > 0.3) {
-        const angle = angleBetween(kp[hipI], kp[kneeI], kp[ankleI])
-        kneeAngles.push(angle)
-        if (angle > 90 && angle < 165) kneeScore += 15
-        else if (angle <= 90) kneeScore += 8  // very tucked, some power
-        else kneeScore += 10
-      }
+  // Collect valid frames during airborne phase (plant → contact)
+  const airFrames: number[] = []
+  for (let i = airStart; i <= airEnd; i++) {
+    const kp = frames[i].keypoints
+    if (kpConf(kp, [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP], 0.25)) {
+      airFrames.push(i)
     }
-    s += kneeScore
+  }
+  if (airFrames.length < 2) return [0, 0]
 
-    // 3. Hip levelness — hips should be relatively level
-    if (kp[L_HIP].conf > 0.3 && kp[R_HIP].conf > 0.3) {
-      const hipDiff = Math.abs(kp[L_HIP].y - kp[R_HIP].y)
-      const hipDiffNorm = personHeight > 0 ? hipDiff / personHeight : 1
-      if (hipDiffNorm < 0.03) s += 15
-      else if (hipDiffNorm < 0.08) s += 10
-      else s += 3
-    }
-
-    // 4. Head position — nose should be roughly above shoulder center
-    if (kp[NOSE].conf > 0.3) {
-      const headOffsetX = Math.abs(kp[NOSE].x - shoulderC.x)
-      const headOffsetNorm = personHeight > 0 ? headOffsetX / personHeight : 1
-      if (headOffsetNorm < 0.05) s += 10
-      else if (headOffsetNorm < 0.12) s += 6
-      else s += 2
-    }
-
-    // 5. Non-hitting arm reaching up/blocking side (shoulder above ear level)
-    if (kp[L_SHOULDER].conf > 0.3 && kp[L_WRIST].conf > 0.3) {
-      if (kp[L_WRIST].y < kp[L_SHOULDER].y - personHeight * 0.1) s += 5
-    }
-
-    if (s > bestScore) { bestScore = s; bestAngle = torsoAngle }
+  // Find best frame near jump peak with good keypoints
+  const peakFrame = Math.min(phases.jumpPeak, airEnd)
+  let bestFrame = airFrames[0]
+  let bestDist = Infinity
+  for (const f of airFrames) {
+    const d = Math.abs(f - peakFrame)
+    if (d < bestDist) { bestDist = d; bestFrame = f }
   }
 
-  return [clamp(bestScore), Math.round(bestAngle * 10) / 10]
+  const kp = frames[bestFrame].keypoints
+  const shoulderC = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
+  const hipC = midpoint(kp[L_HIP], kp[R_HIP])
+
+  // Score 6 specific body position elements
+  const elementScores: number[] = []
+
+  // 1. KNEE TUCK: Are knees bent at ~90° at peak? (angle hip-knee-ankle)
+  {
+    const kneeAngles: number[] = []
+    for (const [hipI, kneeI, ankleI] of [[L_HIP, L_KNEE, L_ANKLE], [R_HIP, R_KNEE, R_ANKLE]] as [number, number, number][]) {
+      if (kpConf(kp, [hipI, kneeI, ankleI], 0.3)) {
+        kneeAngles.push(angleBetween(kp[hipI], kp[kneeI], kp[ankleI]))
+      }
+    }
+    if (kneeAngles.length > 0) {
+      const avgKnee = kneeAngles.reduce((a, b) => a + b, 0) / kneeAngles.length
+      if (avgKnee >= 70 && avgKnee <= 130) elementScores.push(90)
+      else if (avgKnee >= 50 && avgKnee <= 150) elementScores.push(65)
+      else elementScores.push(35)
+    }
+  }
+
+  // 2. HIP ALIGNMENT: Are hips level (not tilted)?
+  {
+    if (kpConf(kp, [L_HIP, R_HIP], 0.3)) {
+      const hipDiff = Math.abs(kp[L_HIP].y - kp[R_HIP].y) / personHeight
+      if (hipDiff < 0.03) elementScores.push(95)
+      else if (hipDiff < 0.06) elementScores.push(75)
+      else if (hipDiff < 0.10) elementScores.push(55)
+      else elementScores.push(30)
+    }
+  }
+
+  // 3. SHOULDER POSITION: Are shoulders back and open (not hunched forward)?
+  {
+    if (kpConf(kp, [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP], 0.3)) {
+      const shoulderAboveHip = (hipC.y - shoulderC.y) / personHeight
+      if (shoulderAboveHip > 0.18) elementScores.push(90)
+      else if (shoulderAboveHip > 0.12) elementScores.push(70)
+      else if (shoulderAboveHip > 0.06) elementScores.push(50)
+      else elementScores.push(30)
+    }
+  }
+
+  // 4. NON-HITTING ARM: Is it extended for balance?
+  {
+    const nhShoulder = isLeftHanded ? R_SHOULDER : L_SHOULDER
+    const nhElbow = isLeftHanded ? R_ELBOW : L_ELBOW
+    const nhWrist = isLeftHanded ? R_WRIST : L_WRIST
+
+    if (kpConf(kp, [nhShoulder, nhWrist], 0.3)) {
+      const armRaised = kp[nhWrist].y < kp[nhShoulder].y
+      const armExtended = kpConf(kp, [nhElbow], 0.3)
+        ? angleBetween(kp[nhShoulder], kp[nhElbow], kp[nhWrist]) > 140
+        : dist(kp[nhShoulder], kp[nhWrist]) / personHeight > 0.25
+
+      if (armRaised && armExtended) elementScores.push(90)
+      else if (armRaised || armExtended) elementScores.push(60)
+      else elementScores.push(30)
+    }
+  }
+
+  // 5. HEAD POSITION: Is the head up and eyes tracking the ball?
+  {
+    if (kpConf(kp, [NOSE, L_SHOULDER, R_SHOULDER], 0.3)) {
+      const headOffsetX = Math.abs(kp[NOSE].x - shoulderC.x) / personHeight
+      const headAbove = (shoulderC.y - kp[NOSE].y) / personHeight
+
+      if (headOffsetX < 0.05 && headAbove > 0) elementScores.push(90)
+      else if (headOffsetX < 0.10 && headAbove > -0.05) elementScores.push(70)
+      else if (headOffsetX < 0.15) elementScores.push(50)
+      else elementScores.push(30)
+    }
+  }
+
+  // 6. BODY ARCH: Slight arch in lower back for power generation?
+  {
+    if (kpConf(kp, [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP], 0.3)) {
+      const spineAngle = angleOfLine(shoulderC, hipC)
+      const deviation = 90 - spineAngle // positive = leaning back (shoulders behind hips)
+
+      if (deviation >= 5 && deviation <= 25) elementScores.push(90)
+      else if (deviation >= 0 && deviation <= 35) elementScores.push(70)
+      else if (deviation > 0) elementScores.push(50)
+      else elementScores.push(30) // Forward lean = no arch = bad for power
+    }
+  }
+
+  if (elementScores.length === 0) return [0, 0]
+
+  const finalScore = elementScores.reduce((a, b) => a + b, 0) / elementScores.length
+  return [clamp(finalScore), Math.round(finalScore * 10) / 10]
 }
 
 function calcTorsoAngleAir(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
   const n = frames.length
-  const peak = phases.jumpPeak
   const personHeight = phases.personHeight
-  const hitW = isLeftHanded ? L_WRIST : R_WRIST
+  if (personHeight < 50) return [0, 0]
 
-  // Measure torso angle across the airborne phase (plant→peak→contact)
-  // Ideal: slight back arch before peak, then forward whip through contact
+  const airStart = Math.max(0, phases.plantFrame)
+  const contactFrame = Math.min(n - 1, phases.contactFrame)
+
+  // Collect torso angles across airborne phase
   const torsoAngles: { frame: number; angle: number }[] = []
-  const searchStart = Math.max(0, phases.plantFrame)
-  const searchEnd = Math.min(n - 1, phases.followThroughEnd)
 
-  for (let i = searchStart; i <= searchEnd; i++) {
+  for (let i = airStart; i <= Math.min(n - 1, phases.followThroughEnd); i++) {
     const kp = frames[i].keypoints
-    if (kp[L_SHOULDER].conf < 0.3 || kp[R_SHOULDER].conf < 0.3) continue
-    if (kp[L_HIP].conf < 0.3 || kp[R_HIP].conf < 0.3) continue
+    if (!kpConf(kp, [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP], 0.3)) continue
 
     const shoulderC = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
     const hipC = midpoint(kp[L_HIP], kp[R_HIP])
-    let angle = angleOfLine(shoulderC, hipC)
-    // Normalize: 0 = perfectly vertical, positive = leaning back, negative = leaning forward
-    // angleOfLine returns degrees from horizontal, so 90 = vertical
-    const deviation = 90 - angle // positive = leaning back, negative = leaning forward
+
+    // Spine angle: shoulder midpoint → hip midpoint
+    // angleOfLine returns degrees from horizontal, 90 = vertical
+    // deviation: positive = leaning back, negative = leaning forward
+    const spineAngle = angleOfLine(shoulderC, hipC)
+    const deviation = 90 - spineAngle
     torsoAngles.push({ frame: i, angle: deviation })
   }
 
-  if (torsoAngles.length < 3) return [50, 0]
+  if (torsoAngles.length < 3) return [0, 0]
 
-  // Score based on the arch-to-whip transition
+  // Split into early airborne (plant→peak) and late airborne (peak→contact)
+  const peak = phases.jumpPeak
+  const earlyAir = torsoAngles.filter(t => t.frame <= peak)
+  const lateAir = torsoAngles.filter(t => t.frame > peak && t.frame <= contactFrame)
+
+  const avgEarly = earlyAir.length > 0
+    ? earlyAir.reduce((s, t) => s + t.angle, 0) / earlyAir.length
+    : 0
+  const avgLate = lateAir.length > 0
+    ? lateAir.reduce((s, t) => s + t.angle, 0) / lateAir.length
+    : avgEarly
+
   let score = 0
 
-  // 1. Check for back arch before peak
-  const prePeak = torsoAngles.filter(t => t.frame <= peak)
-  const postPeak = torsoAngles.filter(t => t.frame > peak)
-
-  const prePeakAngles = prePeak.map(t => t.angle)
-  const postPeakAngles = postPeak.map(t => t.angle)
-
-  const avgPrePeak = prePeakAngles.length > 0 ? prePeakAngles.reduce((a, b) => a + b, 0) / prePeakAngles.length : 0
-  const avgPostPeak = postPeakAngles.length > 0 ? postPeakAngles.reduce((a, b) => a + b, 0) / postPeakAngles.length : 0
-
-  // Ideal: positive lean back before peak (5-25°), then forward whip (negative or small positive)
-  // Pre-peak back arch
-  if (avgPrePeak >= 5 && avgPrePeak <= 25) score += 35
-  else if (avgPrePeak >= 0 && avgPrePeak <= 35) score += 25
-  else if (avgPrePeak > 0) score += 15
+  // 1. Early airborne: 10-25° backward lean (loading the bow)
+  if (avgEarly >= 10 && avgEarly <= 25) score += 40
+  else if (avgEarly >= 5 && avgEarly <= 35) score += 28
+  else if (avgEarly > 0) score += 15
   else score += 5
 
-  // Post-peak forward whip (angle should decrease = more forward)
-  const angleChange = avgPrePeak - avgPostPeak
+  // 2. Whip transition: angle should decrease from early to late (forward snap)
+  const angleChange = avgEarly - avgLate
   if (angleChange >= 10 && angleChange <= 40) score += 35
   else if (angleChange >= 5 && angleChange <= 50) score += 25
   else if (angleChange > 0) score += 15
   else score += 5
 
-  // Torso should not be excessively arched (>45° is dangerous)
-  const maxArch = Math.max(...torsoAngles.map(t => t.angle))
-  if (maxArch <= 35) score += 15
-  else if (maxArch <= 45) score += 10
-  else score += 0
-
-  // Smooth transition (no sudden jerks in torso angle)
-  if (torsoAngles.length >= 3) {
-    let maxChange = 0
-    for (let i = 1; i < torsoAngles.length; i++) {
-      const change = Math.abs(torsoAngles[i].angle - torsoAngles[i - 1].angle)
-      if (change > maxChange) maxChange = change
-    }
-    if (maxChange < 15) score += 15
-    else if (maxChange < 25) score += 10
-    else score += 5
+  // 3. At contact frame: near vertical or slightly forward (0-10° forward lean)
+  const contactAngles = torsoAngles.filter(t => Math.abs(t.frame - contactFrame) <= 1)
+  if (contactAngles.length > 0) {
+    const avgContact = contactAngles.reduce((s, t) => s + t.angle, 0) / contactAngles.length
+    if (avgContact >= -10 && avgContact <= 10) score += 15
+    else if (avgContact >= -20 && avgContact <= 20) score += 10
+    else score += 3
+  } else {
+    score += 5
   }
 
-  return [clamp(score), Math.round(Math.abs(avgPrePeak) * 10) / 10]
+  // 4. Smooth transition (no sudden jerks)
+  if (torsoAngles.length >= 3) {
+    const sorted = [...torsoAngles].sort((a, b) => a.frame - b.frame)
+    let maxChange = 0
+    for (let i = 1; i < sorted.length; i++) {
+      const change = Math.abs(sorted[i].angle - sorted[i - 1].angle)
+      if (change > maxChange) maxChange = change
+    }
+    if (maxChange < 12) score += 10
+    else if (maxChange < 20) score += 7
+    else score += 3
+  }
+
+  return [clamp(score), Math.round(Math.abs(avgEarly) * 10) / 10]
 }
 
 function calcBowAndArrow(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
@@ -1043,51 +1238,72 @@ function calcBowAndArrow(frames: FrameData[], phases: PhaseInfo, isLeftHanded: b
   const hitW = isLeftHanded ? L_WRIST : R_WRIST
   const n = frames.length
   const contact = Math.min(phases.contactFrame, n - 1)
+  const personHeight = phases.personHeight
 
-  const searchStart = Math.max(0, contact - Math.floor(n * 0.15))
+  // Search from plant to contact for maximum load position
+  const searchStart = Math.max(0, phases.plantFrame)
 
-  let maxBackDist = 0, bowFrame = searchStart, bestArmAngle = 0
+  let maxLoadScore = 0
+  let bestArmAngle = 0
+  let found = false
 
   for (let i = searchStart; i < contact; i++) {
     const kp = frames[i].keypoints
-    if (kp[hitS].conf < 0.3 || kp[hitE].conf < 0.3 || kp[hitW].conf < 0.3) continue
+    if (!kpConf(kp, [hitS, hitE, hitW], 0.3)) continue
 
-    const backDist = Math.abs(kp[hitW].y - kp[hitS].y)
-    if (backDist > maxBackDist) {
-      maxBackDist = backDist
-      bowFrame = i
+    const armAngle = angleBetween(kp[hitS], kp[hitE], kp[hitW])
+    const wristDist = personHeight > 0 ? dist(kp[hitS], kp[hitW]) / personHeight : 0
+    const elbowHigh = (kp[hitS].y - kp[hitE].y) / personHeight
+    const wristAbove = (kp[hitS].y - kp[hitW].y) / personHeight
+
+    let s = 0
+    // Arm cocked back: elbow angle 110-160°
+    if (armAngle >= 120 && armAngle <= 155) s += 40
+    else if (armAngle >= 100 && armAngle <= 170) s += 28
+    else if (armAngle >= 80) s += 15
+    else s += 5
+
+    // Wrist far from shoulder (arm fully loaded)
+    if (wristDist > 0.55) s += 25
+    else if (wristDist > 0.35) s += 18
+    else if (wristDist > 0.20) s += 10
+
+    // Elbow above shoulder (high elbow position)
+    if (elbowHigh > 0.05) s += 20
+    else if (elbowHigh > 0) s += 12
+    else s += 3
+
+    // Wrist above shoulder (raised for loading)
+    if (wristAbove > 0.08) s += 15
+    else if (wristAbove > 0.02) s += 8
+
+    if (s > maxLoadScore) {
+      maxLoadScore = s
+      bestArmAngle = armAngle
+      found = true
     }
   }
 
-  const kp = frames[bowFrame].keypoints
-  const armAngle = angleBetween(kp[hitS], kp[hitE], kp[hitW])
-  const personHeight = phases.personHeight
-  const wristDist = personHeight > 0 ? dist(kp[hitS], kp[hitW]) / personHeight : 0
-
-  let score = 0
-  if (armAngle >= 120 && armAngle <= 150) score += 50
-  else if (armAngle >= 100 && armAngle <= 170) score += 35
-  else if (armAngle >= 80 && armAngle <= 180) score += 20
-  else score += 5
-
-  if (wristDist > 0.6) score += 30
-  else if (wristDist > 0.4) score += 20
-  else if (wristDist > 0.2) score += 10
-
-  const elbowHigh = kp[hitS].y - kp[hitE].y
-  if (elbowHigh > 10) score += 20
-  else if (elbowHigh > 0) score += 10
-
-  return [clamp(score), Math.round(armAngle * 10) / 10]
+  if (!found) return [0, 0]
+  return [clamp(maxLoadScore), Math.round(bestArmAngle * 10) / 10]
 }
 
 function calcArmSwingSpeed(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean, fps: number): [number, number] {
   const hitW = isLeftHanded ? L_WRIST : R_WRIST
   const n = frames.length
   const personHeight = phases.personHeight
+  if (personHeight < 50 || fps <= 0) return [0, 0]
+
+  // Focus on the swing phase (plant → follow through end)
+  const swingStart = Math.max(0, phases.plantFrame)
+  const swingEnd = Math.min(n - 1, phases.followThroughEnd)
+
+  // Confidence check
+  const conf = avgKpConf(frames, swingStart, swingEnd, [hitW])
+  if (conf < 0.2) return [0, 0]
 
   const speeds: number[] = [0]
-  for (let i = 1; i < n; i++) {
+  for (let i = swingStart + 1; i <= swingEnd; i++) {
     const w1 = frames[i - 1].keypoints[hitW]
     const w2 = frames[i].keypoints[hitW]
     if (w1.conf > 0.3 && w2.conf > 0.3) {
@@ -1098,16 +1314,17 @@ function calcArmSwingSpeed(frames: FrameData[], phases: PhaseInfo, isLeftHanded:
   }
 
   const maxSpeed = Math.max(...speeds)
-  const normSpeed = personHeight > 0 ? maxSpeed / personHeight : 0
+  const normSpeed = maxSpeed / personHeight
 
   let score: number
-  if (normSpeed > 3.0) score = 92
-  else if (normSpeed > 2.0) score = 78
-  else if (normSpeed > 1.2) score = 60
-  else if (normSpeed > 0.6) score = 45
-  else score = 25
+  if (normSpeed > 3.5) score = 95
+  else if (normSpeed > 2.5) score = 82
+  else if (normSpeed > 1.5) score = 65
+  else if (normSpeed > 0.8) score = 48
+  else if (normSpeed > 0.3) score = 30
+  else score = 15
 
-  return [clamp(score), Math.round(maxSpeed * 100) / 100]
+  return [clamp(score), Math.round(normSpeed * 100) / 100]
 }
 
 function calcContactPoint(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
@@ -1116,29 +1333,40 @@ function calcContactPoint(frames: FrameData[], phases: PhaseInfo, isLeftHanded: 
   const hitW = isLeftHanded ? L_WRIST : R_WRIST
   const n = frames.length
   const contact = Math.min(phases.contactFrame, n - 1)
+  const personHeight = phases.personHeight
 
   const kp = frames[contact].keypoints
-  if (kp[hitS].conf < 0.3 || kp[hitE].conf < 0.3 || kp[hitW].conf < 0.3) return [50, 0]
+  if (!kpConf(kp, [hitS, hitE, hitW], 0.3)) return [0, 0]
 
+  // 1. Full arm extension at contact (shoulder-elbow-wrist ~180°)
   const armAngle = angleBetween(kp[hitS], kp[hitE], kp[hitW])
+  let extensionScore: number
+  if (armAngle >= 170) extensionScore = 95
+  else if (armAngle >= 155) extensionScore = 80
+  else if (armAngle >= 135) extensionScore = 60
+  else if (armAngle >= 110) extensionScore = 40
+  else extensionScore = 20
 
-  let score = 0
-  if (armAngle >= 170) score += 60
-  else if (armAngle >= 155) score += 45
-  else if (armAngle >= 130) score += 30
-  else score += 10
-
-  // Contact near peak height
+  // 2. Contact at or very near peak height
   const peakHipY = phases.hipYs[phases.jumpPeak]
   const contactHipY = phases.hipYs[contact]
-  const personHeight = phases.personHeight
-  const hDiff = personHeight > 0 ? Math.abs(peakHipY - contactHipY) / personHeight : 0
+  const hDiff = personHeight > 0 ? Math.abs(peakHipY - contactHipY) / personHeight : 0.1
 
-  if (hDiff < 0.05) score += 40
-  else if (hDiff < 0.15) score += 30
-  else if (hDiff < 0.30) score += 15
-  else score += 5
+  let heightScore: number
+  if (hDiff < 0.03) heightScore = 95
+  else if (hDiff < 0.10) heightScore = 80
+  else if (hDiff < 0.20) heightScore = 60
+  else if (hDiff < 0.35) heightScore = 40
+  else heightScore = 20
 
+  // 3. Wrist above and in front of shoulder at contact
+  const wristAbove = (kp[hitS].y - kp[hitW].y) / personHeight
+  let positionScore = 50
+  if (wristAbove > 0.15) positionScore = 85
+  else if (wristAbove > 0.08) positionScore = 65
+  else if (wristAbove > 0) positionScore = 45
+
+  const score = extensionScore * 0.45 + heightScore * 0.35 + positionScore * 0.20
   return [clamp(score), Math.round(armAngle * 10) / 10]
 }
 
@@ -1148,21 +1376,31 @@ function calcWristSnap(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boo
   const hitW = isLeftHanded ? L_WRIST : R_WRIST
   const n = frames.length
   const contact = phases.contactFrame
-  const ftEnd = Math.min(phases.followThroughEnd, n - 2)
+  if (fps <= 0) return [0, 0]
+
+  // Focus on frames around contact: contact-2 to contact+5
+  const windowStart = Math.max(0, contact - 2)
+  const windowEnd = Math.min(n - 2, contact + 5)
+  if (windowEnd <= windowStart) return [0, 0]
 
   const anglesAfter: (number | null)[] = []
-  for (let i = contact; i <= ftEnd; i++) {
+  for (let i = windowStart; i <= windowEnd; i++) {
     const kp = frames[i].keypoints
-    if (kp[hitS].conf < 0.3 || kp[hitE].conf < 0.3 || kp[hitW].conf < 0.3) {
+    if (!kpConf(kp, [hitS, hitE, hitW], 0.3)) {
       anglesAfter.push(null)
     } else {
+      // Forearm angle: elbow → wrist direction
       anglesAfter.push(angleOfLine(kp[hitE], kp[hitW]))
     }
   }
 
-  const valid = anglesAfter.map((a, i) => a !== null ? [i, a] as [number, number] : null).filter(Boolean) as [number, number][]
-  if (valid.length < 3) return [50, 0]
+  const valid = anglesAfter
+    .map((a, i) => a !== null ? [i + windowStart, a] as [number, number] : null)
+    .filter(Boolean) as [number, number][]
 
+  if (valid.length < 3) return [0, 0]
+
+  // Calculate angular velocity of the forearm
   const angVels: number[] = []
   for (let j = 1; j < valid.length; j++) {
     const di = valid[j][0] - valid[j - 1][0]
@@ -1170,13 +1408,19 @@ function calcWristSnap(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boo
     if (di > 0) angVels.push(Math.abs(da / di) * fps)
   }
 
-  if (angVels.length === 0) return [50, 0]
+  if (angVels.length === 0) return [0, 0]
 
   const maxAngVel = Math.max(...angVels)
+
+  // Weight angular velocity near contact more heavily
+  const nearContactVels = angVels.slice(Math.max(0, angVels.length - 3))
+  const nearContactMax = nearContactVels.length > 0 ? Math.max(...nearContactVels) : 0
+  const effectiveVel = Math.max(maxAngVel * 0.4, nearContactMax * 0.6)
+
   let score: number
-  if (maxAngVel > 500) score = 90
-  else if (maxAngVel > 300) score = 75
-  else if (maxAngVel > 150) score = 55
+  if (effectiveVel > 500) score = 90
+  else if (effectiveVel > 300) score = 75
+  else if (effectiveVel > 150) score = 55
   else score = 35
 
   return [clamp(score), Math.round(maxAngVel * 100) / 100]
@@ -1189,32 +1433,46 @@ function calcContactHeight(frames: FrameData[], phases: PhaseInfo, isLeftHanded:
   const peak = Math.min(phases.jumpPeak, n - 1)
   const personHeight = phases.personHeight
 
+  if (personHeight < 50) return [0, 0]
+
   const kpC = frames[contact].keypoints
   if (kpC[hitW].conf < 0.3) {
-    // Fallback to hip Y
-    const hDiff = personHeight > 0 ? (phases.hipYs[contact] - phases.hipYs[peak]) / personHeight : 0
-    if (Math.abs(hDiff) < 0.05) return [95, Math.round(Math.abs(hDiff) * 1000) / 1000]
-    if (Math.abs(hDiff) < 0.15) return [80, Math.round(Math.abs(hDiff) * 1000) / 1000]
-    if (Math.abs(hDiff) < 0.30) return [60, Math.round(Math.abs(hDiff) * 1000) / 1000]
-    if (Math.abs(hDiff) < 0.50) return [40, Math.round(Math.abs(hDiff) * 1000) / 1000]
-    return [25, Math.round(Math.abs(hDiff) * 1000) / 1000]
+    // Fallback: use hip Y difference
+    const hDiff = (phases.hipYs[contact] - phases.hipYs[peak]) / personHeight
+    let score: number
+    if (Math.abs(hDiff) < 0.03) score = 95
+    else if (Math.abs(hDiff) < 0.10) score = 80
+    else if (Math.abs(hDiff) < 0.20) score = 60
+    else if (Math.abs(hDiff) < 0.35) score = 40
+    else score = 20
+    return [clamp(score), Math.round(Math.abs(hDiff) * 1000) / 1000]
   }
 
   const contactWristY = kpC[hitW].y
+
+  // Find minimum wrist Y (highest point) within ±3 frames of peak
+  const searchStart = Math.max(0, peak - 3)
+  const searchEnd = Math.min(n - 1, peak + 3)
   const wristYs: number[] = []
-  for (let i = Math.max(0, peak - 5); i < Math.min(n, peak + 6); i++) {
+  for (let i = searchStart; i <= searchEnd; i++) {
     if (frames[i].keypoints[hitW].conf > 0.3) wristYs.push(frames[i].keypoints[hitW].y)
   }
 
   const minWristY = wristYs.length > 0 ? Math.min(...wristYs) : contactWristY
-  const hDiff = personHeight > 0 ? (contactWristY - minWristY) / personHeight : 0.1
+  const hDiff = (contactWristY - minWristY) / personHeight
+
+  // Bonus: wrist should be above head (nose)
+  const headY = kpC[NOSE].conf > 0.3 ? kpC[NOSE].y : Infinity
+  const wristAboveHead = headY !== Infinity ? (headY - contactWristY) / personHeight : 0
 
   let score: number
-  if (hDiff < 0.05) score = 95
-  else if (hDiff < 0.15) score = 80
-  else if (hDiff < 0.30) score = 60
-  else if (hDiff < 0.50) score = 40
-  else score = 25
+  if (hDiff < 0.03) {
+    score = 95
+    if (wristAboveHead > 0.10) score = Math.min(100, score + 5)
+  } else if (hDiff < 0.10) score = 80
+  else if (hDiff < 0.20) score = 60
+  else if (hDiff < 0.35) score = 40
+  else score = 20
 
   return [clamp(score), Math.round(hDiff * 1000) / 1000]
 }
@@ -1224,48 +1482,60 @@ function calcFollowThrough(frames: FrameData[], phases: PhaseInfo, isLeftHanded:
   const n = frames.length
   const contact = phases.contactFrame
   const ftEnd = Math.min(phases.followThroughEnd, n - 1)
+  const personHeight = phases.personHeight
 
-  if (ftEnd <= contact) return [50, 0]
+  if (ftEnd <= contact || personHeight < 50) return [0, 0]
 
+  // Collect wrist positions during follow-through
   const wristPos: { x: number; y: number }[] = []
   for (let i = contact; i <= ftEnd; i++) {
     if (frames[i].keypoints[hitW].conf > 0.3) {
       wristPos.push(frames[i].keypoints[hitW])
     }
   }
+  if (wristPos.length < 2) return [0, 0]
 
-  if (wristPos.length < 2) return [50, 0]
+  let score = 0
 
+  // 1. Total travel distance (normalized by height)
   let totalTravel = 0
   for (let i = 1; i < wristPos.length; i++) {
     totalTravel += dist(wristPos[i], wristPos[i - 1])
   }
+  const normTravel = totalTravel / personHeight
+  if (normTravel > 1.5) score += 35
+  else if (normTravel > 0.8) score += 28
+  else if (normTravel > 0.4) score += 18
+  else score += 8
 
-  // Midline check
+  // 2. Follow-through direction: should cross midline and go downward
   const kpC = frames[Math.min(contact, n - 1)].keypoints
   let midlineX = wristPos[0].x
   if (kpC[L_HIP].conf > 0.3 && kpC[R_HIP].conf > 0.3) {
     midlineX = midpoint(kpC[L_HIP], kpC[R_HIP]).x
   }
 
-  const crossesMidline = wristPos.some(wp => Math.abs(wp.x - midlineX) < phases.personHeight * 0.1)
-  const personHeight = phases.personHeight
-  const normTravel = personHeight > 0 ? totalTravel / personHeight : 0
-
-  let score = 0
-  if (normTravel > 1.5) score += 45
-  else if (normTravel > 0.8) score += 35
-  else if (normTravel > 0.4) score += 20
-  else score += 10
-
-  if (crossesMidline) score += 35
-  else if (wristPos.length > 0) {
-    const movedToward = Math.abs(wristPos[wristPos.length - 1].x - midlineX) < Math.abs(wristPos[0].x - midlineX)
-    score += movedToward ? 20 : 5
+  const crossesMidline = wristPos.some(wp =>
+    (isLeftHanded ? wp.x < midlineX : wp.x > midlineX)
+  )
+  if (crossesMidline) score += 30
+  else {
+    const endDist = Math.abs(wristPos[wristPos.length - 1].x - midlineX)
+    const startDist = Math.abs(wristPos[0].x - midlineX)
+    score += endDist < startDist ? 18 : 5
   }
 
-  if (wristPos.length >= 2 && wristPos[wristPos.length - 1].y > wristPos[0].y) score += 20
-  else if (wristPos.length >= 2) score += 5
+  // 3. Downward trajectory (arm comes down after contact)
+  if (wristPos[wristPos.length - 1].y > wristPos[0].y) {
+    score += 20
+    // Bonus: reaches below waist level
+    const waistY = kpC[L_HIP].conf > 0.3 ? kpC[L_HIP].y : Infinity
+    if (waistY !== Infinity && wristPos[wristPos.length - 1].y > waistY - personHeight * 0.05) {
+      score += 15
+    }
+  } else {
+    score += 5
+  }
 
   return [clamp(score), Math.round(normTravel * 1000) / 1000]
 }
@@ -1275,47 +1545,81 @@ function calcLandingBalance(frames: FrameData[], phases: PhaseInfo): [number, nu
   const peak = phases.jumpPeak
   const personHeight = phases.personHeight
 
-  if (peak >= n - 3) return [50, 0]
+  if (peak >= n - 2 || personHeight < 50) return [0, 0]
 
+  // Find landing frame: hip Y returns near approach level
   const approachHipY = phases.hipYs[phases.plantFrame]
-  let landingFrame = peak
+  let landingFrame = -1
 
   for (let i = peak + 1; i < n; i++) {
     if (phases.hipYs[i] >= approachHipY - personHeight * 0.05) {
       landingFrame = i; break
     }
   }
-  if (landingFrame === peak) landingFrame = n - 1
+  if (landingFrame < 0) landingFrame = Math.min(peak + Math.floor(n * 0.2), n - 1)
   landingFrame = Math.min(landingFrame, n - 1)
 
   const kp = frames[landingFrame].keypoints
+
+  // Minimum confidence check for landing analysis
+  if (!kpConf(kp, [L_KNEE, R_KNEE, L_ANKLE, R_ANKLE, L_HIP, R_HIP], 0.2)) return [0, 0]
+
   let score = 0
 
-  // Knee angle at landing
+  // 1. Knee bend at landing (critical for injury prevention)
   const kneeScores: number[] = []
-  for (const [kneeI, ankleI, hipI] of [[L_KNEE, L_ANKLE, L_HIP], [R_KNEE, R_ANKLE, R_HIP]]) {
-    if (kp[kneeI].conf > 0.3 && kp[ankleI].conf > 0.3 && kp[hipI].conf > 0.3) {
+  for (const [hipI, kneeI, ankleI] of [[L_HIP, L_KNEE, L_ANKLE], [R_KNEE, R_ANKLE, R_HIP]] as [number, number, number][]) {
+    if (kpConf(kp, [hipI, kneeI, ankleI], 0.3)) {
       const angle = angleBetween(kp[hipI], kp[kneeI], kp[ankleI])
-      if (angle < 160) kneeScores.push(80)
-      else if (angle < 175) kneeScores.push(55)
-      else kneeScores.push(30)
+      if (angle >= 90 && angle <= 140) kneeScores.push(90)
+      else if (angle >= 70 && angle <= 160) kneeScores.push(65)
+      else if (angle < 70) kneeScores.push(50) // Too deep
+      else kneeScores.push(30) // Too straight (dangerous)
     }
   }
-  score += kneeScores.length > 0 ? Math.round(kneeScores.reduce((a, b) => a + b, 0) / kneeScores.length) : 30
-
-  // Hip level
-  if (kp[L_HIP].conf > 0.3 && kp[R_HIP].conf > 0.3) {
-    const hipDiff = Math.abs(kp[L_HIP].y - kp[R_HIP].y)
-    if (hipDiff < personHeight * 0.03) score += 20
-    else if (hipDiff < personHeight * 0.08) score += 12
-    else score += 5
+  if (kneeScores.length > 0) {
+    score += Math.round(kneeScores.reduce((a, b) => a + b, 0) / kneeScores.length) * 0.45
+  } else {
+    score += 15
   }
 
-  // Both feet visible
-  if (kp[L_ANKLE].conf > 0.3 && kp[R_ANKLE].conf > 0.3) score += 15
-  else if (kp[L_ANKLE].conf > 0.3 || kp[R_ANKLE].conf > 0.3) score += 8
+  // 2. Hip levelness (balanced landing)
+  if (kpConf(kp, [L_HIP, R_HIP], 0.3)) {
+    const hipDiff = Math.abs(kp[L_HIP].y - kp[R_HIP].y) / personHeight
+    if (hipDiff < 0.03) score += 25
+    else if (hipDiff < 0.06) score += 18
+    else if (hipDiff < 0.10) score += 10
+    else score += 3
+  } else {
+    score += 8
+  }
 
-  return [clamp(score), 0]
+  // 3. Two-footed landing with level feet
+  const bothFeet = kp[L_ANKLE].conf > 0.3 && kp[R_ANKLE].conf > 0.3
+  const oneFoot = kp[L_ANKLE].conf > 0.3 || kp[R_ANKLE].conf > 0.3
+
+  if (bothFeet) {
+    const footDiff = Math.abs(kp[L_ANKLE].y - kp[R_ANKLE].y) / personHeight
+    if (footDiff < 0.05) score += 20
+    else if (footDiff < 0.15) score += 14
+    else score += 8
+  } else if (oneFoot) {
+    score += 10
+  } else {
+    score += 3
+  }
+
+  // 4. Shoulders over hips (not leaning excessively)
+  if (kpConf(kp, [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP], 0.3)) {
+    const shoulderC = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
+    const hipC = midpoint(kp[L_HIP], kp[R_HIP])
+    const offsetNorm = Math.abs(shoulderC.x - hipC.x) / personHeight
+    if (offsetNorm < 0.05) score += 10
+    else if (offsetNorm < 0.15) score += 6
+    else score += 2
+  }
+
+  return [clamp(Math.round(score)), 0]
 }
 
 // ─── Feedback Generation ──────────────────────────────────────────────────────
@@ -1339,7 +1643,12 @@ function generatePhaseFeedback(phase: string, scores: Record<string, number>, sc
     else if (scores.vertical_jump_conversion > 85) parts.push("Great conversion of approach speed into vertical jump height.")
     if (scores.hip_shoulder_rotation < 55) parts.push("Increase hip-shoulder separation during your jump to generate more rotational torque for a powerful swing.")
     else if (scores.hip_shoulder_rotation > 85) parts.push("Excellent hip-shoulder rotation creating strong torque for the swing.")
-    if (scores.body_position_air < 55) parts.push("Work on maintaining better body position in the air, with a slight arch and your hitting arm loaded back ready to swing.")
+    if (scores.body_position_air < 40) parts.push("Your body position in the air needs significant work. Focus on tucking your knees to ~90\u00b0 at peak height, keeping your non-hitting arm extended for balance, and maintaining a slight arch in your lower back to load power for the swing.")
+    else if (scores.body_position_air < 55) parts.push("Work on maintaining better body position in the air \u2014 keep your knees bent at peak height and your non-hitting arm extended for balance. A slight backward arch helps generate power.")
+    else if (scores.body_position_air > 85) parts.push("Excellent airborne body position with proper knee tuck, level hips, and good arm balance.")
+    if (scores.torso_angle_air < 40) parts.push("Your torso angle during the jump needs improvement. You should have a slight backward lean (10-25\u00b0) early in the airborne phase, then snap your torso forward at contact for the whip effect.")
+    else if (scores.torso_angle_air < 55) parts.push("Focus on the arch-to-whip transition: lean slightly back during the airborne phase, then aggressively snap your torso forward as you swing at the ball.")
+    else if (scores.torso_angle_air > 85) parts.push("Great arch-to-whip torso transition that maximizes power transfer through the swing.")
     if (!parts.length) parts.push("Your jump mechanics are solid. Focus on maximizing both height and rotation to increase hitting power.")
     return parts.slice(0, 3).join(' ')
   }
@@ -1528,7 +1837,7 @@ export async function analyzeVideo(
     ['arms_swing_back', () => calcArmsSwingBack(framesData, phases, isLeftHanded)],
     ['vertical_jump_conversion', () => calcVerticalJumpConversion(framesData, phases, fps)],
     ['hip_shoulder_rotation', () => calcHipShoulderRotation(framesData, phases)],
-    ['body_position_air', () => calcBodyPositionAir(framesData, phases)],
+    ['body_position_air', () => calcBodyPositionAir(framesData, phases, isLeftHanded)],
     ['torso_angle_air', () => calcTorsoAngleAir(framesData, phases, isLeftHanded)],
     ['bow_and_arrow', () => calcBowAndArrow(framesData, phases, isLeftHanded)],
     ['arm_swing_speed', () => calcArmSwingSpeed(framesData, phases, isLeftHanded, fps)],
@@ -1590,70 +1899,98 @@ export async function analyzeVideo(
     { key: 'followThrough', score: ftScore },
   ].sort((a, b) => a.score - b.score)
 
-  // Confidence based on frames analyzed
-  let baseConf = 50
-  if (framesData.length >= 18) baseConf = 85
-  else if (framesData.length >= 14) baseConf = 75
-  else if (framesData.length >= 10) baseConf = 60
-  else if (framesData.length >= 5) baseConf = 45
+  // ── Per-metric confidence based on keypoint quality in relevant frames ──
+  const detectedFrameIndices = framesData.map(fd => fd.frameIdx)
+  const n = framesData.length
 
-  const temporalKeys = new Set(['approach_speed', 'footwork_rhythm', 'arm_swing_speed', 'vertical_jump_conversion'])
+  // Helper: frames in a range that exist in detectedFrameIndices
+  const framesInRange = (start: number, end: number) => {
+    return detectedFrameIndices.filter(i => i >= start && i <= end)
+  }
+
+  // Base confidence from total frame count
+  let baseConf = 50
+  if (n >= 18) baseConf = 85
+  else if (n >= 14) baseConf = 75
+  else if (n >= 10) baseConf = 60
+  else if (n >= 5) baseConf = 45
+
+  // Per-metric confidence: check keypoint confidence in the frames each metric uses
+  const metricKpMap: Record<string, { start: number; end: number; kps: number[] }> = {
+    approach_speed:       { start: phases.approachStart, end: phases.approachEnd, kps: [L_HIP, R_HIP] },
+    approach_angle:       { start: phases.approachStart, end: phases.plantFrame, kps: [L_HIP, R_HIP] },
+    last_step_length:     { start: Math.max(0, phases.plantFrame - Math.floor(n * 0.3)), end: phases.plantFrame, kps: [L_ANKLE, R_ANKLE] },
+    footwork_rhythm:      { start: Math.max(0, phases.plantFrame - Math.floor(30 * 2.5)), end: phases.plantFrame, kps: [L_ANKLE, R_ANKLE] },
+    arms_swing_back:      { start: phases.approachStart, end: phases.plantFrame, kps: [L_SHOULDER, R_SHOULDER, L_WRIST, R_WRIST, L_HIP, R_HIP] },
+    vertical_jump_conversion: { start: phases.plantFrame, end: phases.jumpPeak, kps: [L_HIP, R_HIP] },
+    hip_shoulder_rotation: { start: phases.plantFrame, end: phases.contactFrame, kps: [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP] },
+    body_position_air:    { start: phases.plantFrame, end: phases.contactFrame, kps: [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP, L_KNEE, R_KNEE, NOSE] },
+    torso_angle_air:      { start: phases.plantFrame, end: phases.contactFrame, kps: [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP] },
+    bow_and_arrow:        { start: phases.plantFrame, end: phases.contactFrame, kps: [L_SHOULDER, R_SHOULDER, L_ELBOW, R_ELBOW, L_WRIST, R_WRIST] },
+    arm_swing_speed:      { start: phases.plantFrame, end: phases.followThroughEnd, kps: [L_WRIST, R_WRIST] },
+    contact_point:        { start: phases.contactFrame, end: phases.contactFrame, kps: [L_SHOULDER, R_SHOULDER, L_ELBOW, R_ELBOW, L_WRIST, R_WRIST] },
+    wrist_snap:           { start: Math.max(0, phases.contactFrame - 2), end: Math.min(n - 1, phases.contactFrame + 5), kps: [L_SHOULDER, R_SHOULDER, L_ELBOW, R_ELBOW, L_WRIST, R_WRIST] },
+    contact_height:       { start: Math.max(0, phases.jumpPeak - 3), end: Math.min(n - 1, phases.contactFrame), kps: [L_WRIST, R_WRIST, NOSE] },
+    follow_through:       { start: phases.contactFrame, end: phases.followThroughEnd, kps: [L_WRIST, R_WRIST, L_HIP, R_HIP] },
+    landing_balance:      { start: phases.jumpPeak, end: phases.followThroughEnd, kps: [L_KNEE, R_KNEE, L_ANKLE, R_ANKLE, L_HIP, R_HIP, L_SHOULDER, R_SHOULDER] },
+  }
+
   const confidence: Record<string, number> = {}
-  for (const key of Object.keys(scores)) {
-    confidence[key] = temporalKeys.has(key) ? clamp(baseConf - 10) : baseConf
+  for (const [key, range] of Object.entries(metricKpMap)) {
+ const fIdxs = framesInRange(range.start, range.end)
+    if (fIdxs.length === 0) {
+      confidence[key] = 10
+    } else {
+      // If score is 0, confidence should be low
+      if (scores[key] === 0) {
+        confidence[key] = 15
+      } else {
+        const kpConf = avgKpConf(framesData, range.start, range.end, range.kps)
+        // Scale confidence by keypoint quality and frame count
+        const frameFactor = Math.min(1, fIdxs.length / 5)
+        const kpFactor = Math.min(1, kpConf / 0.5) // 0.5 avg conf = full confidence
+        confidence[key] = clamp(Math.round(baseConf * 0.3 + 70 * frameFactor * kpFactor))
+      }
+    }
   }
 
   const avgConfidence = Math.round(Object.values(confidence).reduce((s, v) => s + v, 0) / Object.keys(confidence).length)
 
   // ── Step 8: Map checkpoints and phases to frame indices ──
-  // Map each frame (from framesData) back to the extracted frame index
-  const detectedFrameIndices = framesData.map(fd => fd.frameIdx)
+  // Each checkpoint maps to the SPECIFIC frames used for that metric
+  const phaseFrames: Record<string, number[]> = {}
+  const checkpointFrames: Record<string, number[]> = {}
 
-  // Phase → frame indices
+  // Phase frame ranges
   const phaseFrameRanges: Record<string, [number, number]> = {
     approach: [phases.approachStart, phases.approachEnd],
     jump: [phases.plantFrame, phases.contactFrame],
     contact: [phases.contactFrame, phases.contactFrame],
     followThrough: [phases.contactFrame, phases.followThroughEnd],
   }
-
-  const phaseFrames: Record<string, number[]> = {}
-  const checkpointFrames: Record<string, number[]> = {}
-
   for (const [phaseKey, [start, end]] of Object.entries(phaseFrameRanges)) {
-    const indices: number[] = []
-    for (let i = 0; i < detectedFrameIndices.length; i++) {
-      const origIdx = detectedFrameIndices[i]
-      if (origIdx >= start && origIdx <= end) {
-        indices.push(origIdx)
-      }
-    }
-    phaseFrames[phaseKey] = indices
+    phaseFrames[phaseKey] = framesInRange(start, end)
   }
 
-  // Map each checkpoint to its phase's frames
-  const checkpointPhaseMap: Record<string, string> = {
-    approach_speed: 'approach', approach_angle: 'approach', last_step_length: 'approach',
-    footwork_rhythm: 'approach', arms_swing_back: 'approach',
-    vertical_jump_conversion: 'jump', hip_shoulder_rotation: 'jump',
-    body_position_air: 'jump', torso_angle_air: 'jump',
-    bow_and_arrow: 'contact', arm_swing_speed: 'contact',
-    contact_point: 'contact', wrist_snap: 'contact', contact_height: 'contact',
-    follow_through: 'followThrough', landing_balance: 'followThrough',
-  }
-  for (const [cpKey, phaseKey] of Object.entries(checkpointPhaseMap)) {
-    checkpointFrames[cpKey] = phaseFrames[phaseKey] || []
+  // Map each checkpoint to its specific metric-relevant frames
+  for (const [cpKey, range] of Object.entries(metricKpMap)) {
+    const cpFrames = framesInRange(range.start, range.end)
+    checkpointFrames[cpKey] = cpFrames
   }
 
-  // Also add special targeting: for contact_point, try to include the exact contact frame
+  // Ensure contact_frame is included in contact metrics
   if (detectedFrameIndices.includes(phases.contactFrame)) {
-    if (!checkpointFrames.contact_point.includes(phases.contactFrame)) {
-      checkpointFrames.contact_point.push(phases.contactFrame)
+    for (const cp of ['contact_point', 'wrist_snap', 'contact_height']) {
+      if (!checkpointFrames[cp].includes(phases.contactFrame)) {
+        checkpointFrames[cp].push(phases.contactFrame)
+      }
+      checkpointFrames[cp].sort((a, b) => a - b)
     }
   }
-  // For body_position_air and torso_angle_air, include peak-adjacent frames
+
+  // Ensure peak frames are in airborne metrics
   for (const cp of ['body_position_air', 'torso_angle_air']) {
-    const peakFrames = detectedFrameIndices.filter(i => Math.abs(i - phases.jumpPeak) <= 3)
+    const peakFrames = detectedFrameIndices.filter(i => Math.abs(i - phases.jumpPeak) <= 2)
     for (const pf of peakFrames) {
       if (!checkpointFrames[cp].includes(pf)) checkpointFrames[cp].push(pf)
     }
