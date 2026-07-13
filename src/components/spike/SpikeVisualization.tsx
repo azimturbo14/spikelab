@@ -468,7 +468,7 @@ export default function SpikeVisualization({ frames, playerName }: SpikeVisualiz
           <button
             type="button"
             onClick={() => scroll('left')}
-            className="absolute left-0 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-white/90 shadow-md border border-zinc-200 text-zinc-600 hover:text-zinc-900 hover:bg-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-orange-400/50"
+            className="absolute left-0 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-white/90 shadow-md border border-zinc-200 text-zinc-600 hover:text-zinc-900 hover:bg-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-teal-400/50"
             aria-label="Scroll left"
           >
             <ChevronLeft className="w-5 h-5" />
@@ -480,7 +480,7 @@ export default function SpikeVisualization({ frames, playerName }: SpikeVisualiz
           <button
             type="button"
             onClick={() => scroll('right')}
-            className="absolute right-0 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-white/90 shadow-md border border-zinc-200 text-zinc-600 hover:text-zinc-900 hover:bg-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-orange-400/50"
+            className="absolute right-0 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-white/90 shadow-md border border-zinc-200 text-zinc-600 hover:text-zinc-900 hover:bg-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-teal-400/50"
             aria-label="Scroll right"
           >
             <ChevronRight className="w-5 h-5" />

@@ -102,8 +102,8 @@ export default function AnalysisView({
 
   const phases = [
     { key: 'approach' as const, label: t().analysis.phaseApproach, labelKey: 'phaseLabelApproach' as const, icon: Footprints, color: 'text-teal-500' },
-    { key: 'jump' as const, label: t().analysis.phaseJump, labelKey: 'phaseLabelJump' as const, icon: Activity, color: 'text-amber-500' },
-    { key: 'contact' as const, label: t().analysis.phaseContact, labelKey: 'phaseLabelContact' as const, icon: Flame, color: 'text-orange-500' },
+    { key: 'jump' as const, label: t().analysis.phaseJump, labelKey: 'phaseLabelJump' as const, icon: Activity, color: 'text-cyan-500' },
+    { key: 'contact' as const, label: t().analysis.phaseContact, labelKey: 'phaseLabelContact' as const, icon: Flame, color: 'text-teal-400' },
     { key: 'followThrough' as const, label: t().analysis.phaseFollowThrough, labelKey: 'phaseLabelFollowThrough' as const, icon: ShieldCheck, color: 'text-emerald-500' },
   ]
 
@@ -129,7 +129,7 @@ export default function AnalysisView({
     <div className="space-y-6">
       {/* Overall Score */}
       <Card className="overflow-hidden">
-        <div className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
+        <div className="bg-gradient-to-r from-teal-500/10 via-cyan-500/5 to-transparent p-6 sm:p-8">
           <div className="flex flex-col sm:flex-row items-center gap-6">
             <AnimatedScoreRing score={overallAvg} />
             <div className="text-center sm:text-left flex-1">
@@ -157,7 +157,7 @@ export default function AnalysisView({
           style={{ borderLeftColor: meta.averageConfidence && meta.averageConfidence >= 60 ? '#10b981' : meta.averageConfidence && meta.averageConfidence >= 30 ? '#f59e0b' : '#ef4444' }}>
           <CardContent className="p-4">
             <div className="flex items-start gap-3">
-              <Eye className={`w-5 h-5 mt-0.5 shrink-0 ${meta.averageConfidence && meta.averageConfidence >= 60 ? 'text-emerald-500' : meta.averageConfidence && meta.averageConfidence >= 30 ? 'text-amber-500' : 'text-red-500'}`} />
+              <Eye className={`w-5 h-5 mt-0.5 shrink-0 ${meta.averageConfidence && meta.averageConfidence >= 60 ? 'text-emerald-500' : meta.averageConfidence && meta.averageConfidence >= 30 ? 'text-yellow-500' : 'text-red-500'}`} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium">
                   {meta.averageConfidence && meta.averageConfidence >= 60 ? t().analysis.qualityHigh : meta.averageConfidence && meta.averageConfidence >= 30 ? t().analysis.qualityMedium : t().analysis.qualityLow}
@@ -296,12 +296,12 @@ export default function AnalysisView({
         </Card>
         <Card className="p-5">
           <h3 className="font-semibold mb-3 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-500" /> {t().analysis.topWeaknesses}
+            <AlertTriangle className="w-5 h-5 text-yellow-500" /> {t().analysis.topWeaknesses}
           </h3>
           <ul className="space-y-2">
             {(analysis.topWeaknesses ?? []).map((w, i) => (
               <li key={i} className="text-sm text-muted-foreground flex gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
                 <span>{w}</span>
               </li>
             ))}

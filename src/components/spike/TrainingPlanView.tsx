@@ -38,7 +38,7 @@ export default function TrainingPlanView({
 
   return (
     <div className="space-y-6">
-      <Card className="bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 sm:p-8">
+      <Card className="bg-gradient-to-r from-teal-500/10 via-cyan-500/5 to-transparent p-6 sm:p-8">
         <h2 className="text-xl sm:text-2xl font-bold mb-2">{t().training.title}</h2>
         <p className="text-muted-foreground mb-4">{plan.summary}</p>
         <div className="flex flex-wrap gap-2">
@@ -83,7 +83,7 @@ export default function TrainingPlanView({
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <p className="text-sm font-medium">{drill.name}</p>
                                   {needsEquipment && (
-                                    <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-medium text-teal-600 dark:text-teal-400 bg-teal-500/10 px-1.5 py-0.5 rounded-full shrink-0">
                                       <Package className="w-3 h-3" />
                                       {drill.equipment}
                                     </span>

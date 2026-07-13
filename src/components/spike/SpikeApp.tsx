@@ -219,7 +219,7 @@ export default function SpikeApp() {
       <main className="flex-1">
         {/* Hero */}
         <section className="relative overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 via-transparent to-amber-500/5" />
+          <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 via-transparent to-cyan-500/5" />
           <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-24 text-center">
             <Badge variant="secondary" className="mb-4 gap-1.5">
               <Video className="w-3.5 h-3.5" /> {t().hero.badge}
@@ -230,7 +230,7 @@ export default function SpikeApp() {
               className="text-3xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6"
             >
               {t().hero.title1}{' '}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-amber-500">
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-teal-500 to-cyan-400">
                 {t().hero.titleHighlight}
               </span>
             </motion.h1>
@@ -377,7 +377,7 @@ export default function SpikeApp() {
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   <Button
                     size="lg"
-                    className="flex-1 gap-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+                    className="flex-1 gap-2 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white border-0"
                     disabled={!canAnalyze}
                     onClick={handleAnalyze}
                   >
@@ -486,7 +486,7 @@ export default function SpikeApp() {
                 <Dumbbell className="w-12 h-12 mx-auto mb-4 text-primary/50" />
                 <h3 className="font-semibold text-lg mb-2">{t().training.emptyTitle}</h3>
                 <p className="text-sm text-muted-foreground mb-6">{t().training.readyMsg}</p>
-                <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0">
+                <Button onClick={handleGeneratePlan} disabled={isGeneratingPlan} className="gap-2 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white border-0">
                   {isGeneratingPlan ? (
                     <>
                       <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
