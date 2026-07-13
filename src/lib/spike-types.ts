@@ -64,6 +64,9 @@ export interface AnalysisMetadata {
   framesWithPlayer?: number;
   quality?: 'high' | 'medium' | 'low';
   averageConfidence?: number;
+  analysisMethod?: string;
+  actionWindowStart?: number;
+  actionWindowEnd?: number;
 }
 
 export interface SpikeAnalysis {

@@ -315,3 +315,26 @@ Stage Summary:
 - Analysis results file-based persistence handles server restarts
 - Key accuracy metrics: vertical_jump_conversion=90, arm_swing_speed=92, arms_swing_back=92
 - Some metrics differ between ONNX/PyTorch due to keypoint precision (hip_shoulder_rotation, approach_speed)
+---
+Task ID: 5
+Agent: Main Agent
+Task: Fix 3 issues: analyze ALL visible frames, exercise instance detection, UI alignment
+
+Work Log:
+- Rewrote frame extraction from single-pass (24 fixed frames) to two-pass architecture:
+  - Pass 1 (Scan): Extracts 40 sparse frames across ENTIRE video, runs quick ONNX inference to detect person presence and track hip motion
+  - Pass 2 (Dense): Extracts ALL frames from detected action window at ~10fps (up to 120 frames)
+- Added exercise instance detection: scans full video, finds largest contiguous region with person+motion, adds 0.3s padding, trims tutorial intros/outros automatically
+- Added quickPersonDetect() function for fast scan-pass detection (lower thresholds: 0.2 conf, 3 keypoints)
+- Added loadVideo() helper to share video element between passes
+- Added extractFramesAtTimestamps() shared helper with progress tracking
+- Updated confidence thresholds for more frames (60+ frames = 92% base confidence)
+- Updated AnalysisMetadata type to include actionWindowStart, actionWindowEnd, analysisMethod
+- Fixed stepper tabs alignment: removed flex-1 stretching, added fixed h-10 height, fixed-width connectors (w-8/w-12), shrink-0 on icons, justify-center on container
+- Updated AnalysisView quality banner to show action window timestamps
+
+Stage Summary:
+- Frame count: was 16-24 fixed, now 10-120 dense frames from action window only
+- Tutorial videos: automatically trimmed to exercise instance (no intros/outros analyzed)
+- Stepper tabs: consistent height (h-10), centered layout, fixed connector widths
+- Quality banner: shows "action: Xs – Ys" timestamps

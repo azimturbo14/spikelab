@@ -296,34 +296,34 @@ export default function SpikeApp() {
         <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
           {/* Stepper Tabs */}
           <div className="mb-8">
-            <div className="flex items-center">
+            <div className="flex items-center justify-center gap-0">
               {steps.map((step, i) => {
                 const Icon = STEP_ICONS[step.key]
                 const isClickable = step.key === 'upload' || (step.key === 'analysis' && analysis) || (step.key === 'training' && trainingPlan)
                 return (
-                  <div key={step.key} className="flex items-center justify-center flex-1">
+                  <div key={step.key} className="flex items-center">
                     <button
                       onClick={() => isClickable && setActiveTab(step.key)}
                       disabled={!isClickable}
-                      className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                      className={`flex items-center justify-center gap-2 h-10 px-4 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
                         step.active
-                          ? 'bg-primary text-primary-foreground'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
                           : step.completed
                             ? 'bg-primary/10 text-primary hover:bg-primary/15'
-                            : 'text-muted-foreground cursor-not-allowed'
+                            : 'text-muted-foreground/60 cursor-not-allowed'
                       }`}
                     >
                       {step.completed && !step.active ? (
-                        <CheckCircle2 className="w-4 h-4" />
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
                       ) : (
-                        <Icon className="w-4 h-4" />
+                        <Icon className="w-4 h-4 shrink-0" />
                       )}
                       <span className="hidden sm:inline">{step.label}</span>
                       <span className="sm:hidden">{i + 1}</span>
                     </button>
                     {i < steps.length - 1 && (
-                      <div className={`flex-1 h-px mx-2 transition-colors ${
-                        step.completed ? 'bg-primary/30' : 'bg-border'
+                      <div className={`w-8 sm:w-12 h-px mx-2 transition-colors ${
+                        step.completed ? 'bg-primary/40' : 'bg-border'
                       }`} />
                     )}
                   </div>

@@ -409,9 +409,12 @@ export default function AnalysisView({
                   {meta.averageConfidence && meta.averageConfidence >= 60 ? t().analysis.qualityHigh : meta.averageConfidence && meta.averageConfidence >= 30 ? t().analysis.qualityMedium : t().analysis.qualityLow}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {meta.frameCount && <span>{meta.frameCount} {t().analysis.framesExtracted}</span>}
-                  {meta.averageConfidence !== undefined && <span> · {t().analysis.avgConfidence}: {meta.averageConfidence}%</span>}
-                  {meta.framesWithPlayer !== undefined && <span> · {meta.framesWithPlayer}/{meta.frameCount} {t().analysis.framesWithPlayer}</span>}
+                  {meta.frameCount && <span>{meta.frameCount} frames analyzed</span>}
+                  {meta.averageConfidence !== undefined && <span> · avg confidence: {meta.averageConfidence}%</span>}
+                  {meta.framesWithPlayer !== undefined && <span> · {meta.framesWithPlayer}/{meta.frameCount} frames show the player</span>}
+                  {meta.actionWindowStart !== undefined && meta.actionWindowEnd !== undefined && (
+                    <span> · action: {meta.actionWindowStart}s – {meta.actionWindowEnd}s</span>
+                  )}
                 </p>
               </div>
             </div>

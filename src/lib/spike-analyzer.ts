@@ -151,19 +151,82 @@ async function getOrtSession() {
   return sessionPromise
 }
 
-// ─── Frame Extraction (Smart Sampling) ────────────────────────────────────────
+// ─── Frame Extraction (Two-Pass: Scan → Dense) ────────────────────────────────
+
+interface FrameExtractionResult {
+  imageData: ImageData[]
+  frameImages: string[]
+  frameTimestamps: number[]
+  duration: number
+  fps: number
+  width: number
+  height: number
+  actionWindowStart: number
+  actionWindowEnd: number
+}
 
 /**
- * Extract frames from video using HTML5 Video + Canvas.
- * Instead of every frame (the old problem), we:
- * 1. For short videos (<5s): sample ~24 frames evenly across the whole video
- * 2. For longer videos: first do a quick scan to find the action window, then sample densely there
+ * Extract frames from a video element at given timestamps.
+ * Shared helper used by both scan and dense passes.
  */
-async function extractFramesFromVideo(
-  videoFile: File,
-  count: number,
-  onProgress: ProgressCallback
-): Promise<{ imageData: ImageData[]; frameImages: string[]; frameTimestamps: number[]; duration: number; fps: number; width: number; height: number }> {
+async function extractFramesAtTimestamps(
+  video: HTMLVideoElement,
+  timestamps: number[],
+  videoWidth: number,
+  videoHeight: number,
+  onProgress: ProgressCallback,
+  progressRange: [number, number],
+  label: string
+): Promise<{ imageData: ImageData[]; frameImages: string[]; frameTimestamps: number[] }> {
+  const canvas = document.createElement('canvas')
+  canvas.width = MODEL_INPUT_SIZE
+  canvas.height = MODEL_INPUT_SIZE
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+
+  const displayMaxW = 480
+  const displayScale = Math.min(displayMaxW / videoWidth, 1)
+  const displayW = Math.round(videoWidth * displayScale)
+  const displayH = Math.round(videoHeight * displayScale)
+  const displayCanvas = document.createElement('canvas')
+  displayCanvas.width = displayW
+  displayCanvas.height = displayH
+  const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true })!
+
+  const frames: ImageData[] = []
+  const frameImages: string[] = []
+  const frameTimestamps: number[] = []
+  const total = timestamps.length
+
+  for (let i = 0; i < total; i++) {
+    try {
+      await seekTo(video, timestamps[i])
+      displayCtx.drawImage(video, 0, 0, displayW, displayH)
+      frameImages.push(displayCanvas.toDataURL('image/jpeg', 0.7))
+      frameTimestamps.push(timestamps[i])
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
+      const scale = Math.min(MODEL_INPUT_SIZE / videoWidth, MODEL_INPUT_SIZE / videoHeight)
+      const dw = videoWidth * scale
+      const dh = videoHeight * scale
+      const dx = (MODEL_INPUT_SIZE - dw) / 2
+      const dy = (MODEL_INPUT_SIZE - dh) / 2
+      ctx.drawImage(video, dx, dy, dw, dh)
+      frames.push(ctx.getImageData(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE))
+    } catch {
+      // Skip failed frame extractions
+    }
+    const [pStart, pEnd] = progressRange
+    const pct = pStart + Math.round((i / total) * (pEnd - pStart))
+    onProgress(pct, `${label} (${i + 1}/${total})`)
+  }
+
+  return { imageData: frames, frameImages, frameTimestamps }
+}
+
+/**
+ * Load a video file into an HTMLVideoElement and return it.
+ */
+function loadVideo(videoFile: File): Promise<{ video: HTMLVideoElement; url: string; duration: number; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video')
     video.muted = true
@@ -172,99 +235,16 @@ async function extractFramesFromVideo(
     const url = URL.createObjectURL(videoFile)
     video.src = url
 
-    video.addEventListener('loadedmetadata', async () => {
+    video.addEventListener('loadedmetadata', () => {
       const duration = video.duration
       const width = video.videoWidth
       const height = video.videoHeight
-      // Assume 30fps if not available
-      const fps = 30
-
-      onProgress(5, `Video loaded: ${duration.toFixed(1)}s, ${width}x${height}`)
-
       if (!duration || !isFinite(duration) || duration < 0.5) {
         URL.revokeObjectURL(url)
         reject(new Error('Video is too short or invalid.'))
         return
       }
-
-      // Smart sampling: determine timestamps
-      let timestamps: number[]
-      if (duration <= 5) {
-        // Short video: sample evenly across 90% of video
-        const start = duration * 0.05
-        const end = duration * 0.95
-        timestamps = []
-        for (let i = 0; i < count; i++) {
-          const t = count <= 1 ? (start + end) / 2 : start + (end - start) * (i / (count - 1))
-          timestamps.push(t)
-        }
-      } else {
-        // Longer video: concentrate frames in the middle 60% where the spike likely is
-        // Skip boring beginning/end
-        const margin = duration * 0.2
-        const start = margin
-        const end = duration - margin
-        timestamps = []
-        for (let i = 0; i < count; i++) {
-          const t = count <= 1 ? (start + end) / 2 : start + (end - start) * (i / (count - 1))
-          timestamps.push(t)
-        }
-      }
-
-      onProgress(8, `Extracting ${timestamps.length} frames...`)
-
-      // Create canvas for frame extraction (640x640 for ONNX)
-      const canvas = document.createElement('canvas')
-      canvas.width = MODEL_INPUT_SIZE
-      canvas.height = MODEL_INPUT_SIZE
-      const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-
-      // Create display canvas for frame images (max 480px wide)
-      const displayMaxW = 480
-      const displayScale = Math.min(displayMaxW / width, 1)
-      const displayW = Math.round(width * displayScale)
-      const displayH = Math.round(height * displayScale)
-      const displayCanvas = document.createElement('canvas')
-      displayCanvas.width = displayW
-      displayCanvas.height = displayH
-      const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true })!
-
-      const frames: ImageData[] = []
-      const frameImages: string[] = []
-      const frameTimestamps: number[] = []
-      const totalFrames = timestamps.length
-
-      // Extract frames sequentially (seek + draw)
-      for (let i = 0; i < totalFrames; i++) {
-        try {
-          await seekTo(video, timestamps[i])
-          // Draw at display resolution and capture as JPEG
-          displayCtx.drawImage(video, 0, 0, displayW, displayH)
-          frameImages.push(displayCanvas.toDataURL('image/jpeg', 0.7))
-          frameTimestamps.push(timestamps[i])
-          // Draw maintaining aspect ratio (letterbox) for ONNX
-          ctx.fillStyle = '#000'
-          ctx.fillRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
-          const scale = Math.min(MODEL_INPUT_SIZE / width, MODEL_INPUT_SIZE / height)
-          const dw = width * scale
-          const dh = height * scale
-          const dx = (MODEL_INPUT_SIZE - dw) / 2
-          const dy = (MODEL_INPUT_SIZE - dh) / 2
-          ctx.drawImage(video, dx, dy, dw, dh)
-          const imageData = ctx.getImageData(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
-          frames.push(imageData)
-        } catch {
-          // Skip failed frame extractions
-        }
-
-        const pct = 8 + Math.round((i / totalFrames) * 12)
-        onProgress(pct, `Extracting frames... (${i + 1}/${totalFrames})`)
-      }
-
-      URL.revokeObjectURL(url)
-      onProgress(20, `Extracted ${frames.length} frames`)
-
-      resolve({ imageData: frames, frameImages, frameTimestamps, duration, fps, width, height })
+      resolve({ video, url, duration, width, height })
     })
 
     video.addEventListener('error', () => {
@@ -274,6 +254,242 @@ async function extractFramesFromVideo(
 
     video.load()
   })
+}
+
+/**
+ * Two-pass frame extraction:
+ * Pass 1 (Scan): Sparse frames across the ENTIRE video to find the action window
+ * Pass 2 (Dense): ALL frames within the action window at ~10fps
+ *
+ * For tutorial/exercise videos, this automatically trims to just the exercise instance.
+ */
+async function extractFramesFromVideo(
+  videoFile: File,
+  onProgress: ProgressCallback
+): Promise<FrameExtractionResult> {
+  const SCAN_FRAMES = 40
+  const DENSE_FPS = 10  // sample rate for dense pass
+  const MAX_DENSE_FRAMES = 120  // cap to keep inference fast
+  const WINDOW_PADDING = 0.3  // seconds of padding around detected action
+  const MIN_ACTION_RATIO = 0.05  // minimum action window as fraction of video
+
+  const { video, url, duration, width, height } = await loadVideo(videoFile)
+  const fps = 30
+
+  onProgress(5, `Video loaded: ${duration.toFixed(1)}s, ${width}x${height}`)
+
+  // ── Pass 1: Quick scan across the ENTIRE video ──
+  const scanTimestamps: number[] = []
+  const scanMargin = duration * 0.02  // tiny margin to avoid seek issues at boundaries
+  for (let i = 0; i < SCAN_FRAMES; i++) {
+    const t = SCAN_FRAMES <= 1
+      ? duration / 2
+      : scanMargin + (duration - 2 * scanMargin) * (i / (SCAN_FRAMES - 1))
+    scanTimestamps.push(t)
+  }
+
+  onProgress(8, `Scanning video for action window...`)
+  const scanResult = await extractFramesAtTimestamps(
+    video, scanTimestamps, width, height, onProgress,
+    [8, 14], 'Scanning for action...'
+  )
+
+  // ── Run quick inference on scan frames ──
+  onProgress(14, 'Detecting exercise instance...')
+  const session = await getOrtSession() as any
+  const inputName = session.inputNames[0]
+
+  const scanPresence: boolean[] = []  // person detected in each scan frame
+  const scanMotion: number[] = []  // hip displacement between consecutive frames
+  let prevHipX: number | null = null
+
+  for (let fi = 0; fi < scanResult.imageData.length; fi++) {
+    const imgData = scanResult.imageData[fi]
+    const detected = quickPersonDetect(imgData, session, inputName, width, height)
+    scanPresence.push(detected.detected)
+
+    if (detected.hipX !== null) {
+      if (prevHipX !== null) {
+        scanMotion.push(Math.abs(detected.hipX - prevHipX))
+      } else {
+        scanMotion.push(0)
+      }
+      prevHipX = detected.hipX
+    } else {
+      scanMotion.push(0)
+      prevHipX = null
+    }
+  }
+
+  // ── Find action window ──
+  // Find the largest contiguous region where person is detected, weighted by motion
+  let bestStart = 0
+  let bestEnd = scanPresence.length - 1
+  let bestScore = 0
+  let regionStart = -1
+
+  for (let i = 0; i < scanPresence.length; i++) {
+    if (scanPresence[i]) {
+      if (regionStart === -1) regionStart = i
+    } else {
+      if (regionStart !== -1) {
+        const regionEnd = i - 1
+        const regionLen = regionEnd - regionStart + 1
+        // Score: length weighted by motion activity
+        const motionInRegion = scanMotion.slice(regionStart, regionEnd + 1).reduce((a, b) => a + b, 0)
+        const score = regionLen * 2 + motionInRegion * 0.5
+        if (score > bestScore) {
+          bestScore = score
+          bestStart = regionStart
+          bestEnd = regionEnd
+        }
+        regionStart = -1
+      }
+    }
+  }
+  // Handle region extending to end of scan
+  if (regionStart !== -1) {
+    const regionEnd = scanPresence.length - 1
+    const regionLen = regionEnd - regionStart + 1
+    const motionInRegion = scanMotion.slice(regionStart, regionEnd + 1).reduce((a, b) => a + b, 0)
+    const score = regionLen * 2 + motionInRegion * 0.5
+    if (score > bestScore) {
+      bestStart = regionStart
+      bestEnd = regionEnd
+    }
+  }
+
+  // Convert scan indices to timestamps
+  let actionStart = scanResult.frameTimestamps[bestStart] ?? 0
+  let actionEnd = scanResult.frameTimestamps[bestEnd] ?? duration
+
+  // Add padding
+  actionStart = Math.max(0, actionStart - WINDOW_PADDING)
+  actionEnd = Math.min(duration, actionEnd + WINDOW_PADDING)
+
+  // Ensure minimum action window (for very short detections)
+  if (actionEnd - actionStart < duration * MIN_ACTION_RATIO) {
+    const center = (actionStart + actionEnd) / 2
+    const halfWindow = Math.max((actionEnd - actionStart) / 2, duration * MIN_ACTION_RATIO / 2)
+    actionStart = Math.max(0, center - halfWindow)
+    actionEnd = Math.min(duration, center + halfWindow)
+  }
+
+  // For very short videos, use the whole video
+  if (duration <= 5) {
+    actionStart = 0
+    actionEnd = duration
+  }
+
+  console.log(`[SpikeLab] Action window: ${actionStart.toFixed(2)}s - ${actionEnd.toFixed(2)}s (${(actionEnd - actionStart).toFixed(2)}s of ${duration.toFixed(2)}s total)`)
+  onProgress(16, `Found action: ${(actionEnd - actionStart).toFixed(1)}s`)
+
+  // ── Pass 2: Dense frame extraction from action window ──
+  const actionDuration = actionEnd - actionStart
+  const denseCount = Math.min(MAX_DENSE_FRAMES, Math.max(10, Math.floor(actionDuration * DENSE_FPS)))
+
+  const denseTimestamps: number[] = []
+  for (let i = 0; i < denseCount; i++) {
+    const t = denseCount <= 1
+      ? (actionStart + actionEnd) / 2
+      : actionStart + (actionEnd - actionStart) * (i / (denseCount - 1))
+    denseTimestamps.push(t)
+  }
+
+  onProgress(17, `Extracting ${denseCount} frames from action window...`)
+  const denseResult = await extractFramesAtTimestamps(
+    video, denseTimestamps, width, height, onProgress,
+    [17, 20], 'Extracting action frames...'
+  )
+
+  URL.revokeObjectURL(url)
+  onProgress(20, `Extracted ${denseResult.imageData.length} frames from action window`)
+
+  return {
+    imageData: denseResult.imageData,
+    frameImages: denseResult.frameImages,
+    frameTimestamps: denseResult.frameTimestamps,
+    duration: actionEnd - actionStart,
+    fps,
+    width,
+    height,
+    actionWindowStart: actionStart,
+    actionWindowEnd: actionEnd,
+  }
+}
+
+/**
+ * Quick person detection for scan pass. Returns detected + hip X position for motion tracking.
+ */
+function quickPersonDetect(
+  imgData: ImageData,
+  session: any,
+  inputName: string,
+  videoWidth: number,
+  _videoHeight: number
+): { detected: boolean; hipX: number | null } {
+  const float32Data = new Float32Array(1 * 3 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE)
+  for (let p = 0; p < MODEL_INPUT_SIZE * MODEL_INPUT_SIZE; p++) {
+    float32Data[p] = imgData.data[p * 4] / 255.0
+    float32Data[MODEL_INPUT_SIZE * MODEL_INPUT_SIZE + p] = imgData.data[p * 4 + 1] / 255.0
+    float32Data[2 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE + p] = imgData.data[p * 4 + 2] / 255.0
+  }
+
+  try {
+    const inputTensor = new ((globalThis as any).ort.Tensor)('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE])
+    const results = session.run({ [inputName]: inputTensor })
+    const outputKey = session.outputNames[0]
+    const output = results[outputKey]
+    const data = output.data as Float32Array
+    const dims = output.dims as number[]
+    const numDetections = dims[2]
+
+    let bestIdx = -1
+    let bestScore = 0
+
+    for (let d = 0; d < numDetections; d++) {
+      const objConf = data[d + numDetections * 4]
+      if (objConf < 0.2) continue
+      const clsConf = data[d + numDetections * 5]
+      const conf = objConf * clsConf
+      if (conf < 0.2 || conf <= bestScore) continue
+      let kpVisible = 0
+      for (let k = 0; k < NUM_KEYPOINTS; k++) {
+        const kpConf = data[d + numDetections * (6 + k * 3 + 2)]
+        if (kpConf > 0.3) kpVisible++
+      }
+      if (kpVisible < 3) continue
+      bestScore = conf
+      bestIdx = d
+    }
+
+    if (bestIdx >= 0) {
+      const d = bestIdx
+      // Get hip X for motion tracking (use L_HIP + R_HIP midpoint)
+      const lHipX = data[d + numDetections * (6 + L_HIP * 3)]
+      const lHipC = data[d + numDetections * (6 + L_HIP * 3 + 2)]
+      const rHipX = data[d + numDetections * (6 + R_HIP * 3)]
+      const rHipC = data[d + numDetections * (6 + R_HIP * 3 + 2)]
+
+      const scale = Math.min(MODEL_INPUT_SIZE / videoWidth, MODEL_INPUT_SIZE / videoHeight)
+      const padX = (MODEL_INPUT_SIZE - videoWidth * scale) / 2
+      const mapX = (v: number) => (v - padX) / scale
+
+      if (lHipC > 0.3 && rHipC > 0.3) {
+        return { detected: true, hipX: (mapX(lHipX) + mapX(rHipX)) / 2 }
+      } else if (lHipC > 0.3) {
+        return { detected: true, hipX: mapX(lHipX) }
+      } else if (rHipC > 0.3) {
+        return { detected: true, hipX: mapX(rHipX) }
+      }
+      return { detected: true, hipX: null }
+    }
+
+    return { detected: false, hipX: null }
+  } catch (err) {
+    console.warn('[SpikeLab] Quick detect failed:', err)
+    return { detected: false, hipX: null }
+  }
 }
 
 function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
@@ -1785,10 +2001,9 @@ export async function analyzeVideo(
 ): Promise<SpikeAnalysis> {
   console.log(`[SpikeLab] Starting browser analysis: ${videoFile.name} (${(videoFile.size / 1024 / 1024).toFixed(1)}MB)`)
 
-  // ── Step 1: Smart frame extraction ──
-  const TARGET_FRAMES = 24
+  // ── Step 1: Two-pass frame extraction (scan → dense) ──
   onProgress(3, 'Loading video...')
-  const { imageData, frameImages, frameTimestamps, duration, fps, width, height } = await extractFramesFromVideo(videoFile, TARGET_FRAMES, onProgress)
+  const { imageData, frameImages, frameTimestamps, duration, fps, width, height, actionWindowStart, actionWindowEnd } = await extractFramesFromVideo(videoFile, onProgress)
 
   if (imageData.length < 5) {
     throw new Error(`Could not extract enough frames from the video (${imageData.length}). The video may be too short or corrupted.`)
@@ -1908,12 +2123,13 @@ export async function analyzeVideo(
     return detectedFrameIndices.filter(i => i >= start && i <= end)
   }
 
-  // Base confidence from total frame count
+  // Base confidence from total frame count (adjusted for dense sampling)
   let baseConf = 50
-  if (n >= 18) baseConf = 85
-  else if (n >= 14) baseConf = 75
-  else if (n >= 10) baseConf = 60
-  else if (n >= 5) baseConf = 45
+  if (n >= 60) baseConf = 92
+  else if (n >= 40) baseConf = 85
+  else if (n >= 25) baseConf = 78
+  else if (n >= 15) baseConf = 65
+  else if (n >= 8) baseConf = 50
 
   // Per-metric confidence: check keypoint confidence in the frames each metric uses
   const metricKpMap: Record<string, { start: number; end: number; kps: number[] }> = {
@@ -2017,6 +2233,8 @@ export async function analyzeVideo(
       framesWithPlayer: framesData.length,
       quality: avgConfidence >= 60 ? 'high' as const : avgConfidence >= 30 ? 'medium' as const : 'low' as const,
       analysisMethod: 'YOLOv8 Pose (Browser ONNX/WASM)',
+      actionWindowStart: Math.round(actionWindowStart * 100) / 100,
+      actionWindowEnd: Math.round(actionWindowEnd * 100) / 100,
     },
     frames: frameImages,
     frameTimestamps: frameTimestamps,
