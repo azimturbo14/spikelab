@@ -296,16 +296,16 @@ export default function SpikeApp() {
         <section id="upload-section" className="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
           {/* Stepper Tabs */}
           <div className="mb-8">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center">
               {steps.map((step, i) => {
                 const Icon = STEP_ICONS[step.key]
                 const isClickable = step.key === 'upload' || (step.key === 'analysis' && analysis) || (step.key === 'training' && trainingPlan)
                 return (
-                  <div key={step.key} className="flex items-center flex-1">
+                  <div key={step.key} className="flex items-center justify-center flex-1">
                     <button
                       onClick={() => isClickable && setActiveTab(step.key)}
                       disabled={!isClickable}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                      className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
                         step.active
                           ? 'bg-primary text-primary-foreground'
                           : step.completed
