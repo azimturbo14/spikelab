@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { writeFile, unlink, readdir, mkdtemp } from 'fs/promises'
+import { writeFile, unlink, readdir, mkdtemp, mkdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
-import { execFile } from 'child_process'
+import { spawn } from 'child_process'
 import type { SpikeAnalysis, CheckpointScores, CheckpointConfidence } from '@/lib/spike-types'
 import { createJob, updateJob, completeJob, failJob } from '@/lib/analysis-jobs'
 
@@ -23,78 +23,11 @@ const SCORE_KEYS: (keyof CheckpointScores)[] = [
   'contact_point', 'wrist_snap', 'contact_height', 'follow_through', 'landing_balance',
 ]
 
+const RESULTS_DIR = '/tmp/spikelab-results'
+
 function clampScore(val: number, defaultVal = 0): number {
   const n = typeof val === 'number' && !isNaN(val) ? val : defaultVal
   return Math.round(Math.max(0, Math.min(100, n)))
-}
-
-/**
- * Run the YOLOv8 pose analysis script on a video file.
- * Returns parsed SpikeAnalysis object.
- */
-function runYoloAnalysis(videoPath: string): Promise<SpikeAnalysis> {
-  return new Promise((resolve, reject) => {
-    // Use self-healing wrapper that auto-installs deps if missing
-    const wrapperPath = path.join(process.cwd(), 'run_analysis.sh')
-
-    // Set environment variables for the subprocess
-    const env = {
-      ...process.env,
-      HOME: '/tmp',
-      TORCH_HOME: '/tmp/torch',
-      HF_HOME: '/tmp/hf',
-      YOLO_CONFIG_DIR: '/tmp/Ultralytics',
-    }
-
-    const child = execFile('bash', [wrapperPath, videoPath], {
-      env,
-      timeout: 300_000, // 5 minute timeout (first run may need to install deps)
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for JSON output
-      cwd: process.cwd(),
-    }, (err, stdout, stderr) => {
-      if (err) {
-        // Check if there's a JSON error message in stdout
-        try {
-          const errorData = JSON.parse(stdout.trim())
-          if (errorData.error) {
-            reject(new Error(errorData.error))
-            return
-          }
-        } catch {
-          // Not JSON, use the raw error
-        }
-        const msg = stderr?.trim() || err.message
-        reject(new Error(`YOLO analysis failed: ${msg.substring(0, 500)}`))
-        return
-      }
-
-      try {
-        // Parse JSON from stdout (may have warning lines before/after)
-        let output = stdout.trim()
-        const jsonStart = output.indexOf('{')
-        const jsonEnd = output.lastIndexOf('}') + 1
-        if (jsonStart >= 0 && jsonEnd > jsonStart) {
-          output = output.substring(jsonStart, jsonEnd)
-        }
-
-        const data = JSON.parse(output)
-        const analysis = buildAnalysis(data)
-        resolve(analysis)
-      } catch (parseErr) {
-        console.error('[SpikeLab] Failed to parse YOLO output:', stdout.substring(0, 500))
-        reject(new Error('Failed to parse analysis results. The video may not contain a detectable person.'))
-      }
-    })
-
-    // Log stderr for debugging but don't fail on it
-    child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString()
-      // Only log non-warning messages
-      if (!text.includes('WARNING') && !text.includes('ultralytics')) {
-        console.log('[SpikeLab YOLO]', text.trim())
-      }
-    })
-  })
 }
 
 /**
@@ -106,7 +39,6 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
   const rawPhaseAnalysis = (data.phaseAnalysis || {}) as Record<string, Record<string, unknown>>
   const framesAnalyzed = typeof metrics.frames_analyzed === 'number' ? metrics.frames_analyzed : 0
   const videoDuration = typeof metrics.video_duration_sec === 'number' ? metrics.video_duration_sec : 0
-  const videoFps = typeof metrics.video_fps === 'number' ? metrics.video_fps : 30
 
   // Build scores with all 16 checkpoints
   const scores: Record<string, number> = {}
@@ -114,7 +46,7 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
     scores[key] = clampScore(rawScores[key] ?? 50)
   }
 
-  // Add torso_angle_air if not in raw scores (original script has 15 checkpoints)
+  // Add torso_angle_air if not in raw scores
   if (!('torso_angle_air' in rawScores)) {
     scores.torso_angle_air = clampScore(scores.body_position_air * 0.9 + 5)
   }
@@ -128,12 +60,10 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
   else if (framesAnalyzed >= 5) baseConf = 45
 
   for (const key of SCORE_KEYS) {
-    // Temporal checkpoints get slightly lower confidence
     const temporalCheckpoints = new Set(['approach_speed', 'footwork_rhythm', 'arm_swing_speed', 'vertical_jump_conversion'])
     confidence[key] = temporalCheckpoints.has(key) ? clampScore(baseConf - 10) : baseConf
   }
 
-  // If torso_angle_air was estimated, give it lower confidence
   if (!('torso_angle_air' in rawScores)) {
     confidence.torso_angle_air = clampScore(baseConf - 25)
   }
@@ -159,7 +89,6 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
   }
 
   // Phase analysis
-  const phaseKeys = ['approach', 'jump', 'contact', 'followThrough'] as const
   const phaseAnalysis = {
     approach: {
       score: clampScore((rawPhaseAnalysis.approach?.score as number) ?? 50),
@@ -183,7 +112,6 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
     },
   }
 
-  // Priority order (weakest phase first)
   const phaseScores = [
     { key: 'approach', score: phaseAnalysis.approach.score },
     { key: 'jump', score: phaseAnalysis.jump.score },
@@ -192,7 +120,6 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
   ]
   const priorityOrder = phaseScores.sort((a, b) => a.score - b.score).map(p => p.key)
 
-  // Average confidence
   const avgConfidence = Math.round(
     Object.values(confidence).reduce((s, v) => s + v, 0) / Object.keys(confidence).length
   )
@@ -224,7 +151,8 @@ function buildAnalysis(data: Record<string, unknown>): SpikeAnalysis {
 
 /**
  * POST: Start an analysis job. Returns immediately with { jobId }.
- * The actual processing happens in the background.
+ * The analysis runs as a fully detached process that writes results to disk.
+ * This prevents OOM from Python/PyTorch memory usage affecting the Node.js server.
  */
 export async function POST(request: NextRequest) {
   let tempDir = ''
@@ -245,22 +173,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Video file too large. Maximum 50MB.' }, { status: 400 })
     }
 
-    // Create job immediately
     const job = createJob()
     const jobId = job.id
 
-    // Read form data while request is alive
-    const playerName = (formData.get('name') as string) || 'the player'
-    const position = (formData.get('position') as string) || 'Outside Hitter'
-    const experience = (formData.get('experience') as string) || 'Intermediate'
-
-    // Read video bytes
+    // Read form data
     const videoBytes = new Uint8Array(await videoFile.arrayBuffer())
     const videoName = videoFile.name
     const videoSize = videoFile.size
 
-    // Return immediately with jobId
-    const bgPromise = (async () => {
+    // Save video and launch detached analysis
+    ;(async () => {
       try {
         tempDir = await mkdtemp(path.join(tmpdir(), 'spikelab-'))
         const ext = videoName.split('.').pop() || 'mp4'
@@ -268,34 +190,90 @@ export async function POST(request: NextRequest) {
 
         await writeFile(videoPath, Buffer.from(videoBytes))
 
-        console.log(`[SpikeLab] [${jobId}] Analyzing video with YOLOv8: ${videoName} (${(videoSize / 1024 / 1024).toFixed(1)}MB)`)
+        // Ensure results directory exists
+        await mkdir(RESULTS_DIR, { recursive: true })
 
-        // Step 1: YOLOv8 Pose Analysis
-        updateJob(jobId, { step: 'analyzing', message: 'Preparing AI model... (first run may take a minute to set up)', percent: 10 })
+        const resultFile = path.join(RESULTS_DIR, `${jobId}.json`)
+        const errorFile = path.join(RESULTS_DIR, `${jobId}.error`)
+        const lockFile = path.join(RESULTS_DIR, `${jobId}.lock`)
 
-        const analysis = await runYoloAnalysis(videoPath)
+        // Write lock file
+        await writeFile(lockFile, String(Date.now()), 'utf-8')
 
-        console.log(`[SpikeLab] [${jobId}] YOLO analysis complete. Overall: ${analysis.overallPower}, Level: ${analysis.estimatedLevel}, Frames: ${analysis.metadata?.frameCount}`)
+        console.log(`[SpikeLab] [${jobId}] Launching detached analysis: ${videoName} (${(videoSize / 1024 / 1024).toFixed(1)}MB)`)
+        updateJob(jobId, { step: 'analyzing', message: 'Loading YOLOv8 pose model...', percent: 10 })
 
-        updateJob(jobId, { step: 'done', message: 'Analysis complete!', percent: 100 })
-        completeJob(jobId, analysis)
+        // Create a shell wrapper that:
+        // 1. Runs the Python analysis
+        // 2. Writes stdout (the JSON result) to the result file
+        // 3. Writes any error to the error file
+        const shellScript = `#!/bin/bash
+export HOME="/tmp"
+export TORCH_HOME="/tmp/torch"
+export HF_HOME="/tmp/hf"
+export YOLO_CONFIG_DIR="/tmp/Ultralytics"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ANALYSIS_SCRIPT="$5"
+VIDEO_PATH="$1"
+RESULT_FILE="$2"
+ERROR_FILE="$3"
+LOCK_FILE="$4"
+
+if [ ! -f "$ANALYSIS_SCRIPT" ]; then
+  echo "Analysis script not found" > "$ERROR_FILE"
+  rm -f "$LOCK_FILE"
+  exit 1
+fi
+
+# Run analysis, capture output
+OUTPUT=$(python3 "$ANALYSIS_SCRIPT" "$VIDEO_PATH" 2>/dev/null)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+  echo "Analysis failed (exit $EXIT_CODE)" > "$ERROR_FILE"
+  rm -f "$LOCK_FILE"
+  exit 1
+fi
+
+# Extract JSON from output (may have warnings)
+echo "$OUTPUT" | python3 -c "
+import sys, json
+text = sys.stdin.read()
+start = text.find('{')
+end = text.rfind('}') + 1
+if start >= 0 and end > start:
+    data = json.loads(text[start:end])
+    with open('$RESULT_FILE', 'w') as f:
+        json.dump(data, f)
+else:
+    with open('$ERROR_FILE', 'w') as f:
+        f.write('No JSON output from analysis')
+" 2>/dev/null
+
+rm -f "$LOCK_FILE"
+`
+
+        const wrapperPath = path.join(tempDir, 'run_detached.sh')
+        await writeFile(wrapperPath, shellScript.replace(/\$RESULT_FILE/g, resultFile).replace(/\$ERROR_FILE/g, errorFile).replace(/\$LOCK_FILE/g, lockFile), { mode: 0o755 })
+
+        // Spawn fully detached — no pipes, no parent-wait
+        const child = spawn('bash', [wrapperPath, videoPath, resultFile, errorFile, lockFile, path.join(process.cwd(), 'spike_pose_analysis.py')], {
+          env: { ...process.env, HOME: '/tmp' },
+          detached: true,
+          stdio: 'ignore',
+          cwd: process.cwd(),
+        })
+
+        // Allow parent to exit independently
+        child.unref()
+
+        console.log(`[SpikeLab] [${jobId}] Detached process launched (PID ${child.pid})`)
       } catch (err: unknown) {
-        console.error(`[SpikeLab] [${jobId}] Error:`, err)
-        const message = err instanceof Error ? err.message : 'An unexpected error occurred'
+        console.error(`[SpikeLab] [${jobId}] Setup error:`, err)
+        const message = err instanceof Error ? err.message : 'Failed to start analysis'
         failJob(jobId, message)
-      } finally {
-        if (tempDir) {
-          try {
-            const files = await readdir(tempDir).catch(() => [])
-            for (const f of files) await unlink(path.join(tempDir, f)).catch(() => {})
-            await unlink(tempDir).catch(() => {})
-          } catch { /* ignore */ }
-        }
       }
     })()
-
-    // Keep a global reference to prevent Next.js/Turbopack from GC'ing the background promise
-    ;(globalThis as unknown as Record<string, unknown>).__spikelab_bg = bgPromise
 
     return NextResponse.json({ jobId })
   } catch (err: unknown) {

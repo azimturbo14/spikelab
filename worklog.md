@@ -284,3 +284,34 @@ Work Log:
 Stage Summary:
 - Dark mode now has richer, warmer dark tones with better contrast
 - Primary teal color is slightly more vibrant (higher chroma)
+---
+Task ID: accuracy-test
+Agent: Main Agent
+Task: Test IMG_0526.MOV video analysis for accuracy and fix issues
+
+Work Log:
+- Installed Python ML dependencies (ultralytics, torch CPU, onnxruntime, matplotlib, torchvision)
+- Cleared 2.5GB disk space by removing unused venv packages (triton, vtkmodules, catboost, xgboost, etc.)
+- Ran initial analysis with PyTorch YOLOv8n-pose - found max_jump_height_px=0 (plant=peak frame)
+- Debugged phase detection: plant_frame and jump_peak were identical (both 22) due to 10px threshold
+- Fixed plant detection: changed to argmax of hip_y in 1.5s window before peak
+- Fixed contact detection: restricted to peak or later (was detecting backswing as contact at frame 16)
+- Fixed approach_start: set to first frame with valid hip keypoints (not always 0)
+- Rewrote calc_contact_height: measures arm extension above shoulder (not wrist vs min-wrist)
+- Tested fixes: vertical_jump_conversion 50→90, contact_height 25→85, overallPower 73→79
+- Discovered 4GB cgroup memory limit - Node.js + PyTorch (~1.2GB) together exceed limit
+- Exported YOLOv8n-pose to ONNX format (640x640) - reduced inference memory to ~130MB
+- Rewrote spike_pose_analysis.py to use onnxruntime instead of PyTorch/ultralytics
+- Implemented ONNX post-processing: sigmoid on confidences, NMS with top-K pre-filtering
+- Rewrote analyze-spike route: detached spawn with file-based result persistence
+- Rewrote analyze-status route: recovers results from /tmp files after server restart
+- E2E verified: submit → 6s analysis → result recovered → server alive
+
+Stage Summary:
+- Phase detection now correctly identifies: plant (frame 15), peak (frame 22), contact (frame 23)
+- Jump height correctly measured: 178px (1.29x body height)
+- ONNX backend uses ~130MB vs ~1.2GB for PyTorch (10x reduction)
+- Server survives analysis via detached process architecture
+- Analysis results file-based persistence handles server restarts
+- Key accuracy metrics: vertical_jump_conversion=90, arm_swing_speed=92, arms_swing_back=92
+- Some metrics differ between ONNX/PyTorch due to keypoint precision (hip_shoulder_rotation, approach_speed)

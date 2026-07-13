@@ -2,13 +2,15 @@
 """
 YOLOv8-pose Volleyball Spike Biomechanical Analysis
 Usage: python3 spike_pose_analysis.py <video_path> [output_json_path]
+
+Uses ONNX Runtime for lightweight inference (~130MB RAM vs ~1.2GB for PyTorch).
 """
 
 import os
-os.environ['YOLO_CONFIG_DIR'] = '/tmp/Ultralytics'
 os.environ['HOME'] = '/tmp'
 os.environ['TORCH_HOME'] = '/tmp/torch'
 os.environ['HF_HOME'] = '/tmp/hf'
+os.environ['YOLO_CONFIG_DIR'] = '/tmp/Ultralytics'
 
 import sys
 import json
@@ -18,13 +20,137 @@ from typing import Optional, Tuple, List, Dict, Any
 
 import cv2
 import numpy as np
+import onnxruntime as ort
 
-# Must import after env vars are set
-from ultralytics import YOLO
+# Path to ONNX model (relative to this script)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ONNX_MODEL_PATH = os.path.join(SCRIPT_DIR, 'yolov8n-pose.onnx')
 
-# Suppress ultralytics logging
-import logging
-logging.getLogger("ultralytics").setLevel(logging.ERROR)
+# Global session (lazy loaded)
+_ort_session = None
+
+def get_ort_session():
+    global _ort_session
+    if _ort_session is None:
+        _ort_session = ort.InferenceSession(
+            ONNX_MODEL_PATH,
+            providers=['CPUExecutionProvider'],
+        )
+    return _ort_session
+
+MODEL_INPUT_SIZE = 640  # Must match export imgsz
+
+def run_onnx_pose(frame_bgr: np.ndarray, conf_thresh: float = 0.25):
+    """Run YOLOv8-pose ONNX model on a single frame.
+    Returns list of detections: [{keypoints: (17,3), conf: float, bbox: [x1,y1,x2,y2]}, ...]
+    """
+    session = get_ort_session()
+    h, w = frame_bgr.shape[:2]
+
+    # Preprocess
+    img = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
+    img = img.astype(np.float32) / 255.0
+    img = img.transpose(2, 0, 1)[np.newaxis, ...]  # (1, 3, H, W)
+
+    # Inference
+    outputs = session.run(None, {'images': img})
+    pred = outputs[0][0]  # (56, 2100)
+
+    # Transpose: (56, 2100) -> (2100, 56)
+    pred = pred.T
+
+    # Split outputs BEFORE applying sigmoid
+    boxes = pred[:, :4]       # cx, cy, w, h (DFL-decoded, no sigmoid needed)
+    kpts = pred[:, 4:55]      # 17 keypoints × 3 (x, y, conf) = 51 columns
+    obj_conf_raw = pred[:, 55]  # objectness (needs sigmoid)
+
+    # Apply sigmoid ONLY to confidence values (not x, y coordinates)
+    kp_confs = 1.0 / (1.0 + np.exp(-kpts[:, 2::3]))  # sigmoid on kp confidences: (2100, 17)
+    obj_conf = 1.0 / (1.0 + np.exp(-obj_conf_raw))     # sigmoid on objectness: (2100,)
+    avg_kp_conf = kp_confs.mean(axis=1)  # (2100,)
+
+    # Combined confidence
+    scores = obj_conf * avg_kp_conf
+
+    # Filter by confidence
+    mask = scores > conf_thresh
+    if not mask.any():
+        return []
+
+    boxes = boxes[mask]
+    kpts = kpts[mask]
+    scores = scores[mask]
+    kp_confs = kp_confs[mask]  # Filter keypoint confidences too
+
+    # Scale boxes and keypoints back to original image
+    scale_x = w / MODEL_INPUT_SIZE
+    scale_y = h / MODEL_INPUT_SIZE
+    boxes[:, 0] *= scale_x
+    boxes[:, 1] *= scale_y
+    boxes[:, 2] *= scale_x
+    boxes[:, 3] *= scale_y
+    kpts[:, 0::3] *= scale_x
+    kpts[:, 1::3] *= scale_y
+
+    # Simple NMS
+    keep = nms(boxes, scores, iou_thresh=0.45)
+    if len(keep) == 0:
+        return []
+
+    detections = []
+    for idx in keep:
+        cx, cy, bw, bh = boxes[idx]
+        x1, y1, x2, y2 = cx - bw/2, cy - bh/2, cx + bw/2, cy + bh/2
+        kp = np.zeros((17, 3), dtype=np.float32)
+        kp[:, 0] = kpts[idx, 0::3]  # x
+        kp[:, 1] = kpts[idx, 1::3]  # y
+        kp[:, 2] = kp_confs[idx]     # sigmoided confidence (0-1)
+        detections.append({
+            'keypoints': kp,
+            'conf': float(scores[idx]),
+            'bbox': [float(x1), float(y1), float(x2), float(y2)],
+        })
+
+    return detections
+
+
+def nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float = 0.45, max_dets: int = 300) -> list:
+    """Fast Non-Maximum Suppression with pre-filtering."""
+    if len(boxes) == 0:
+        return []
+    # Pre-filter: keep top-K by score to limit O(n²) cost
+    if len(boxes) > max_dets:
+        topk = np.argpartition(scores, -max_dets)[-max_dets:]
+        boxes = boxes[topk]
+        scores = scores[topk]
+    
+    x1 = boxes[:, 0] - boxes[:, 2] / 2
+    y1 = boxes[:, 1] - boxes[:, 3] / 2
+    x2 = boxes[:, 0] + boxes[:, 2] / 2
+    y2 = boxes[:, 1] + boxes[:, 3] / 2
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    suppressed = set()
+    for i in order:
+        if i in suppressed:
+            continue
+        keep.append(int(i))
+        ix1, iy1, ix2, iy2 = x1[i], y1[i], x2[i], y2[i]
+        iarea = areas[i]
+        for j in order:
+            if j in suppressed or j == i:
+                continue
+            xx1 = max(ix1, x1[j])
+            yy1 = max(iy1, y1[j])
+            xx2 = min(ix2, x2[j])
+            yy2 = min(iy2, y2[j])
+            inter = max(0, xx2 - xx1) * max(0, yy2 - yy1)
+            iou = inter / (iarea + areas[j] - inter + 1e-6)
+            if iou > iou_thresh:
+                suppressed.add(j)
+    return keep
 
 # COCO 17 keypoints
 KP_NAMES = [
@@ -140,7 +266,7 @@ def smooth(series: List[float], window: int = 3) -> List[float]:
 
 def extract_keypoints(video_path: str) -> Tuple[List[Dict], float, float, int, int]:
     """
-    Run YOLOv8-pose on video, return per-frame keypoint data.
+    Run YOLOv8-pose (ONNX) on video, return per-frame keypoint data.
     Returns: (frames_data, fps, duration, width, height)
     Each frame_data: { 'frame_idx': int, 'keypoints': np.array (17,3), 'conf': float, 'bbox': list }
     """
@@ -159,8 +285,6 @@ def extract_keypoints(video_path: str) -> Tuple[List[Dict], float, float, int, i
     if duration < 3.0:
         sample_every = 1
 
-    model = YOLO('yolov8n-pose.pt')
-
     frames_data = []
     frame_idx = 0
 
@@ -169,38 +293,22 @@ def extract_keypoints(video_path: str) -> Tuple[List[Dict], float, float, int, i
         if not ret:
             break
         if frame_idx % sample_every == 0:
-            results = model(frame, verbose=False, conf=0.15, iou=0.45)
-            if results and results[0].keypoints is not None:
-                kpts = results[0].keypoints
-                if kpts.xy is not None and len(kpts.xy) > 0:
-                    # Pick largest/most confident detection
-                    best_idx = 0
-                    best_score = 0
-                    boxes = results[0].boxes
-                    for i in range(len(kpts.xy)):
-                        conf = float(boxes[i].conf) if boxes is not None and i < len(boxes) else 0.5
-                        # Also consider box area as tiebreaker
-                        if boxes is not None and i < len(boxes):
-                            area = float(boxes[i].xywh[0][2] * boxes[i].xywh[0][3])
-                        else:
-                            area = 0
-                        score = conf * 1000 + area
-                        if score > best_score:
-                            best_score = score
-                            best_idx = i
+            detections = run_onnx_pose(frame, conf_thresh=0.25)
+            if detections:
+                # Pick most confident detection
+                best = max(detections, key=lambda d: d['conf'] * 1000 + (d['bbox'][2] - d['bbox'][0]) * (d['bbox'][3] - d['bbox'][1]))
+                
+                # Skip if average keypoint confidence is too low (noisy distant detection)
+                avg_kp_conf = best['keypoints'][:, 2].mean()
+                if avg_kp_conf < 0.45:
+                    frame_idx += 1
+                    continue
 
-                    kp_xy = kpts.xy[best_idx].cpu().numpy()  # (17, 2)
-                    kp_conf = kpts.conf[best_idx].cpu().numpy() if kpts.conf is not None else np.ones(17)
-                    kp_with_conf = np.hstack([kp_xy, kp_conf.reshape(-1, 1)])  # (17, 3)
-
-                    bbox = list(boxes[best_idx].xyxy[0].cpu().numpy()) if boxes is not None and best_idx < len(boxes) else [0,0,0,0]
-                    det_conf = float(boxes[best_idx].conf) if boxes is not None and best_idx < len(boxes) else 0.5
-
-                    frames_data.append({
+                frames_data.append({
                         'frame_idx': frame_idx,
-                        'keypoints': kp_with_conf,
-                        'conf': det_conf,
-                        'bbox': bbox,
+                        'keypoints': best['keypoints'].copy(),
+                        'conf': best['conf'],
+                        'bbox': best['bbox'],
                     })
         frame_idx += 1
 
@@ -393,25 +501,31 @@ def detect_phases(frames_data: List[Dict], fps: float, is_left_handed: bool) -> 
     # Find jump peak (minimum hip_y = highest point)
     peak_idx = int(np.argmin(smoothed_hip_y))
 
-    # Find plant frame (last local maximum in hip_y before peak)
-    plant_idx = peak_idx
-    for i in range(peak_idx - 1, max(0, peak_idx - int(fps * 1.5)), -1):
-        if smoothed_hip_y[i] >= smoothed_hip_y[plant_idx]:
-            plant_idx = i
-        if smoothed_hip_y[i] < smoothed_hip_y[peak_idx] + 10:
-            break
-    # Refine: find the actual last rise before the drop
-    for i in range(peak_idx - 1, max(0, peak_idx - int(fps * 1.0)), -1):
-        if smoothed_hip_y[i] > smoothed_hip_y[i + 1] + 2:
-            plant_idx = i + 1
-            break
-    else:
-        # Fallback: highest hip_y point before peak
-        search_start = max(0, peak_idx - int(fps * 1.5))
-        plant_idx = search_start + int(np.argmax(smoothed_hip_y[search_start:peak_idx + 1]))
+    # Find plant frame: the deepest crouch (highest hip_y) before the peak.
+    # Search up to 1.5s before peak for the maximum hip_y.
+    search_start = max(0, peak_idx - int(fps * 1.5))
+    search_range = smoothed_hip_y[search_start:peak_idx + 1]
+    plant_idx = search_start + int(np.argmax(search_range))
 
-    # Approach: frames before plant
-    approach_start = 0
+    # Ensure plant is actually before peak (not at the same frame)
+    if plant_idx >= peak_idx:
+        # Look further back or use the frame just before peak
+        plant_idx = max(search_start, peak_idx - 1)
+        # Find highest hip_y in extended range
+        for i in range(peak_idx - 1, max(0, peak_idx - int(fps * 2.0)), -1):
+            if smoothed_hip_y[i] > smoothed_hip_y[plant_idx]:
+                plant_idx = i
+
+    # Approach: frames before plant, but only from first frame with valid hips
+    first_valid = 0
+    for i in range(n):
+        if hip_ys[i] is not None and hip_xs[i] is not None:
+            # Check it was actually detected (not filled from another frame)
+            kp = frames_data[i]['keypoints']
+            if kp[L_HIP, 2] > 0.3 and kp[R_HIP, 2] > 0.3:
+                first_valid = i
+                break
+    approach_start = first_valid
     approach_end = plant_idx
 
     # Find contact frame (max wrist speed of hitting arm)
@@ -427,12 +541,19 @@ def detect_phases(frames_data: List[Dict], fps: float, is_left_handed: bool) -> 
             wrist_speeds.append(0)
 
     if wrist_speeds:
-        contact_idx = int(np.argmax(wrist_speeds)) + 1  # +1 because speeds are offset by 1
+        # Only look for contact AT or AFTER the peak (not before)
+        peak_start_search = max(1, peak_idx - 1)  # start from peak-1
+        relevant_speeds = wrist_speeds[peak_start_search:]
+        if relevant_speeds and max(relevant_speeds) > 0:
+            local_argmax = int(np.argmax(relevant_speeds))
+            contact_idx = peak_start_search + local_argmax + 1  # +1 for speed offset
+        else:
+            contact_idx = peak_idx
     else:
         contact_idx = peak_idx
 
-    # Clamp contact to be near jump peak (should be during/after jump)
-    contact_idx = max(peak_idx - int(fps * 0.3), min(peak_idx + int(fps * 0.5), contact_idx))
+    # Clamp contact: must be at or after peak, up to 0.5s after
+    contact_idx = max(peak_idx, min(peak_idx + int(fps * 0.5), contact_idx))
 
     # Follow through: frames after contact
     follow_end = min(n - 1, contact_idx + int(fps * 1.0))
@@ -1066,53 +1187,75 @@ def calc_wrist_snap(frames_data: List[Dict], phases: Dict, is_left_handed: bool,
 
 
 def calc_contact_height(frames_data: List[Dict], phases: Dict, is_left_handed: bool) -> Tuple[int, float]:
-    """Wrist height at contact relative to peak jump."""
-    contact = phases['contact_frame']
+    """Measure how high the hitting wrist reaches relative to the body during the airborne phase.
+
+    At low frame rates (~8fps), the exact contact frame may miss the ball strike moment.
+    Instead, we find the frame during the jump where the wrist is highest AND above
+    the shoulder (i.e., the arm is extended upward, not just cocked back).
+    """
     peak = phases['jump_peak']
+    plant = phases['plant_frame']
     n = len(frames_data)
-    contact = min(contact, n - 1)
     peak = min(peak, n - 1)
+    person_height = phases['person_height']
+    if person_height <= 0:
+        person_height = 200
 
     hit_w = L_WRIST if is_left_handed else R_WRIST
 
-    kp_contact = frames_data[contact]['keypoints']
-    kp_peak = frames_data[peak]['keypoints']
+    # Search from plant to follow-through for the best "contact height" frame:
+    # wrist is high (low y) AND wrist is above the shoulder (arm extended upward)
+    best_extension = -999  # wrist_y - shoulder_y (negative = wrist above shoulder)
+    best_frame = peak
+    ft_end = phases.get('follow_through_end', min(n - 1, peak + 10))
+    search_end = min(n, ft_end + 1)
 
-    if kp_contact[hit_w, 2] < 0.3 or kp_peak[hit_w, 2] < 0.3:
-        # Fallback to hip_y
-        peak_hip_y = phases['hip_ys'][peak]
-        contact_hip_y = phases['hip_ys'][contact]
-        person_height = phases['person_height']
-        height_diff = (contact_hip_y - peak_hip_y) / person_height if person_height > 0 else 0
-    else:
-        # Use actual wrist height
-        contact_wrist_y = kp_contact[hit_w, 1]
-        # Find max wrist height around peak
-        wrist_ys = []
-        for i in range(max(0, peak - 5), min(n, peak + 6)):
-            kp = frames_data[i]['keypoints']
-            if kp[hit_w, 2] > 0.3:
-                wrist_ys.append(kp[hit_w, 1])
-        if wrist_ys:
-            min_wrist_y = min(wrist_ys)  # Highest point = lowest y
-            person_height = phases['person_height']
-            height_diff = (contact_wrist_y - min_wrist_y) / person_height if person_height > 0 else 0
+    for i in range(plant, search_end):
+        kp = frames_data[i]['keypoints']
+        if kp[hit_w, 2] < 0.3:
+            continue
+        # Get shoulder position (use the hitting-side shoulder)
+        hit_shoulder = L_SHOULDER if is_left_handed else R_SHOULDER
+        if kp[hit_shoulder, 2] < 0.3:
+            continue
+        wrist_y = kp[hit_w, 1]
+        shoulder_y = kp[hit_shoulder, 1]
+        extension = shoulder_y - wrist_y  # positive = wrist above shoulder
+        if extension > best_extension:
+            best_extension = extension
+            best_frame = i
+
+    # If no valid frame found, use peak
+    if best_extension <= 0:
+        # Wrist never got above shoulder during jump — score low
+        extension_ratio = best_extension / person_height  # negative
+        if extension_ratio < -0.1:
+            score = 30  # wrist well below shoulder
+        elif extension_ratio < 0.0:
+            score = 45  # wrist at shoulder level
         else:
-            height_diff = 0.1
+            score = 50
+        return clamp(score), round(extension_ratio, 3)
 
-    # Score: closer to 0 (contact at peak) = better
-    if height_diff < 0.05:
+    # extension_ratio: how far above shoulder, normalized by person_height
+    extension_ratio = best_extension / person_height
+
+    # Full arm extension ≈ 0.8-1.0 person_height above shoulder
+    # Good contact: wrist 0.4+ person_heights above shoulder
+    if extension_ratio >= 0.8:
         score = 95
-    elif height_diff < 0.15:
-        score = 80
-    elif height_diff < 0.30:
-        score = 60
-    elif height_diff < 0.50:
-        score = 40
+    elif extension_ratio >= 0.6:
+        score = 85
+    elif extension_ratio >= 0.4:
+        score = 72
+    elif extension_ratio >= 0.2:
+        score = 58
+    elif extension_ratio >= 0.05:
+        score = 42
     else:
-        score = 25
+        score = 30
 
-    return clamp(score), round(height_diff, 3)
+    return clamp(score), round(extension_ratio, 3)
 
 
 def calc_follow_through(frames_data: List[Dict], phases: Dict, is_left_handed: bool) -> Tuple[int, float]:
