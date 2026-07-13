@@ -1,11 +1,12 @@
 'use client'
 
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion'
-import { useState, useEffect } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   CheckCircle2, AlertTriangle, ArrowRight, Activity,
   Footprints, Dumbbell, ShieldCheck, Flame, Target,
-  Info, Clock, Eye, EyeOff
+  Info, Clock, Eye, EyeOff, ChevronLeft, ChevronRight,
+  Film
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,6 +23,107 @@ import {
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
 
+/* ─── Frame Carousel Component ───────────────────────────────── */
+function FrameCarousel({
+  frames,
+  frameIndices,
+  frameTimestamps,
+  label,
+}: {
+  frames: string[]
+  frameIndices: number[]
+  frameTimestamps?: number[]
+  label: string
+}) {
+  const [currentIdx, setCurrentIdx] = useState(0)
+
+  const relevantFrames = useMemo(() => {
+    if (!frames || frames.length === 0) return []
+    return frameIndices
+      .filter(i => i >= 0 && i < frames.length)
+      .map(i => ({
+        src: frames[i],
+        index: i,
+        timestamp: frameTimestamps?.[i] ?? null,
+      }))
+  }, [frames, frameIndices, frameTimestamps])
+
+  if (relevantFrames.length === 0) return null
+
+  const canPrev = currentIdx > 0
+  const canNext = currentIdx < relevantFrames.length - 1
+  const currentFrame = relevantFrames[currentIdx]
+
+  return (
+    <div className="mt-3 rounded-lg border bg-muted/20 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-muted/30 border-b">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Film className="w-3.5 h-3.5" />
+          <span>{label}</span>
+        </div>
+        <span className="text-xs font-medium tabular-nums text-muted-foreground">
+          {currentIdx + 1} / {relevantFrames.length}
+        </span>
+      </div>
+      <div className="relative">
+        <div className="aspect-video bg-black/5 flex items-center justify-center">
+          {currentFrame && (
+            <img
+              src={currentFrame.src}
+              alt={`Frame ${currentFrame.index + 1}`}
+              className="max-w-full max-h-full object-contain"
+              loading="eager"
+            />
+          )}
+        </div>
+        {/* Navigation arrows */}
+        {relevantFrames.length > 1 && (
+          <>
+            <button
+              onClick={() => setCurrentIdx(i => Math.max(0, i - 1))}
+              disabled={!canPrev}
+              className={`absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm flex items-center justify-center transition-all hover:bg-background ${
+                canPrev ? 'opacity-100 hover:scale-105' : 'opacity-30 cursor-not-allowed'
+              }`}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setCurrentIdx(i => Math.min(relevantFrames.length - 1, i + 1))}
+              disabled={!canNext}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm flex items-center justify-center transition-all hover:bg-background ${
+                canNext ? 'opacity-100 hover:scale-105' : 'opacity-30 cursor-not-allowed'
+              }`}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </>
+        )}
+        {/* Timestamp overlay */}
+        {currentFrame?.timestamp !== null && (
+          <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/60 text-white text-[10px] font-mono">
+            {(currentFrame.timestamp ?? 0).toFixed(2)}s
+          </div>
+        )}
+      </div>
+      {/* Dot indicators */}
+      {relevantFrames.length > 1 && (
+        <div className="flex justify-center gap-1 py-2">
+          {relevantFrames.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setCurrentIdx(i)}
+              className={`w-1.5 h-1.5 rounded-full transition-all ${
+                i === currentIdx ? 'bg-primary w-4' : 'bg-muted-foreground/30 hover:bg-muted-foreground/50'
+              }`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ─── Animated Score Ring ────────────────────────────────── */
 function AnimatedScoreRing({ score }: { score: number }) {
   const circumference = 2 * Math.PI * 52 // ~327
@@ -30,6 +132,7 @@ function AnimatedScoreRing({ score }: { score: number }) {
   const [displayScore, setDisplayScore] = useState(0)
 
   useEffect(() => {
+    count.set(0)
     const controls = animate(count, score, {
       duration: 1.2,
       ease: 'easeOut',
@@ -111,7 +214,7 @@ export default function AnalysisView({
     approach: t().analysis.phaseLabelApproach,
     jump: t().analysis.phaseLabelJump,
     contact: t().analysis.phaseLabelContact,
-    followThrough: t().analysis.phaseLabelFollowThrough,
+    followThrough: t().analysis.phaseFollowThrough,
   }
 
   function getScoreLabel(score: number): string {
@@ -124,6 +227,35 @@ export default function AnalysisView({
 
   const checkpoints = t().checkpoints
   const checkpointFeedback = analysis.checkpointFeedback ?? {}
+
+  // Derive weakness keys (bottom 3 by score) for frame display
+  const weaknessKeys = useMemo(() => {
+    const sorted = [...scoreEntries].sort((a, b) => a.score - b.score)
+    return sorted.slice(0, 3).map(e => e.key)
+  }, [scoreEntries])
+
+  // Get frame indices for a checkpoint key
+  const getCheckpointFrameIndices = (key: string): number[] => {
+    return analysis.checkpointFrames?.[key] ?? []
+  }
+
+  // Map checkpoint keys back from the label text in topWeaknesses
+  // The format is "Checkpoint Label: description" 
+  const labelToKey = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const [k, v] of Object.entries(CHECKPOINT_LABELS)) {
+      map[v.label.toLowerCase()] = k
+    }
+    return map
+  }, [])
+
+  const getWeaknessKey = (weaknessText: string): string | null => {
+    const lower = weaknessText.toLowerCase()
+    for (const [label, key] of Object.entries(labelToKey)) {
+      if (lower.startsWith(label)) return key
+    }
+    return null
+  }
 
   return (
     <div className="space-y-6">
@@ -279,7 +411,7 @@ export default function AnalysisView({
         </CardContent>
       </Card>
 
-      {/* Strengths & Weaknesses */}
+      {/* Strengths & Weaknesses with Frame Carousels */}
       <div className="grid sm:grid-cols-2 gap-4">
         <Card className="p-5">
           <h3 className="font-semibold mb-3 flex items-center gap-2">
@@ -299,15 +431,64 @@ export default function AnalysisView({
             <AlertTriangle className="w-5 h-5 text-yellow-500" /> {t().analysis.topWeaknesses}
           </h3>
           <ul className="space-y-2">
-            {(analysis.topWeaknesses ?? []).map((w, i) => (
-              <li key={i} className="text-sm text-muted-foreground flex gap-2">
-                <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
-                <span>{w}</span>
-              </li>
-            ))}
+            {(analysis.topWeaknesses ?? []).map((w, i) => {
+              const cpKey = getWeaknessKey(w)
+              const frameIndices = cpKey ? getCheckpointFrameIndices(cpKey) : []
+              return (
+                <li key={i}>
+                  <div className="text-sm text-muted-foreground flex gap-2">
+                    <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
+                    <span>{w}</span>
+                  </div>
+                  {analysis.frames && analysis.frames.length > 0 && frameIndices.length > 0 && (
+                    <FrameCarousel
+                      frames={analysis.frames}
+                      frameIndices={frameIndices}
+                      frameTimestamps={analysis.frameTimestamps}
+                      label={cpKey ? CHECKPOINT_LABELS[cpKey as keyof typeof CHECKPOINT_LABELS]?.label ?? cpKey : 'Related frames'}
+                    />
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </Card>
       </div>
+
+      {/* Phase-specific frame galleries */}
+      {analysis.frames && analysis.frames.length > 0 && analysis.phaseFrames && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Film className="w-5 h-5" />
+              Phase Breakdown — Key Frames
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {phases.map(({ key, label, icon: Icon, color }) => {
+              const phaseFrameIndices = analysis.phaseFrames?.[key] ?? []
+              if (phaseFrameIndices.length === 0) return null
+              return (
+                <div key={key}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Icon className={`w-4 h-4 ${color}`} />
+                    <h4 className="text-sm font-semibold">{label}</h4>
+                    <Badge variant="secondary" className="text-[10px]">
+                      {phaseFrameIndices.length} frames
+                    </Badge>
+                  </div>
+                  <FrameCarousel
+                    frames={analysis.frames}
+                    frameIndices={phaseFrameIndices}
+                    frameTimestamps={analysis.frameTimestamps}
+                    label={`${label} phase`}
+                  />
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Methodology Disclosure */}
       <Card className="p-4">

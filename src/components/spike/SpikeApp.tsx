@@ -25,7 +25,6 @@ import {
   type PlayerProfile,
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
-import { analyzeVideoInBrowser } from '@/lib/yolo-browser'
 
 type TabState = 'upload' | 'analysis' | 'training'
 

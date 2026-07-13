@@ -79,6 +79,14 @@ export interface SpikeAnalysis {
   overallPower: number;
   priorityOrder?: string[];
   metadata?: AnalysisMetadata;
+  /** Base64 data-URLs of extracted frames (JPEG, display resolution) */
+  frames?: string[];
+  /** Maps each checkpoint key to the frame indices relevant to it */
+  checkpointFrames?: Record<string, number[]>;
+  /** Maps each phase key to the frame indices in that phase */
+  phaseFrames?: Record<string, number[]>;
+  /** Timestamp in seconds for each frame (parallel to `frames` array) */
+  frameTimestamps?: number[];
 }
 
 export interface TrainingWeek {

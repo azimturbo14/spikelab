@@ -138,7 +138,7 @@ async function extractFramesFromVideo(
   videoFile: File,
   count: number,
   onProgress: ProgressCallback
-): Promise<{ imageData: ImageData[]; duration: number; fps: number; width: number; height: number }> {
+): Promise<{ imageData: ImageData[]; frameImages: string[]; frameTimestamps: number[]; duration: number; fps: number; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video')
     video.muted = true
@@ -188,20 +188,36 @@ async function extractFramesFromVideo(
 
       onProgress(8, `Extracting ${timestamps.length} frames...`)
 
-      // Create canvas for frame extraction
+      // Create canvas for frame extraction (640x640 for ONNX)
       const canvas = document.createElement('canvas')
       canvas.width = MODEL_INPUT_SIZE
       canvas.height = MODEL_INPUT_SIZE
       const ctx = canvas.getContext('2d', { willReadFrequently: true })!
 
+      // Create display canvas for frame images (max 480px wide)
+      const displayMaxW = 480
+      const displayScale = Math.min(displayMaxW / width, 1)
+      const displayW = Math.round(width * displayScale)
+      const displayH = Math.round(height * displayScale)
+      const displayCanvas = document.createElement('canvas')
+      displayCanvas.width = displayW
+      displayCanvas.height = displayH
+      const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true })!
+
       const frames: ImageData[] = []
+      const frameImages: string[] = []
+      const frameTimestamps: number[] = []
       const totalFrames = timestamps.length
 
       // Extract frames sequentially (seek + draw)
       for (let i = 0; i < totalFrames; i++) {
         try {
           await seekTo(video, timestamps[i])
-          // Draw maintaining aspect ratio (letterbox)
+          // Draw at display resolution and capture as JPEG
+          displayCtx.drawImage(video, 0, 0, displayW, displayH)
+          frameImages.push(displayCanvas.toDataURL('image/jpeg', 0.7))
+          frameTimestamps.push(timestamps[i])
+          // Draw maintaining aspect ratio (letterbox) for ONNX
           ctx.fillStyle = '#000'
           ctx.fillRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
           const scale = Math.min(MODEL_INPUT_SIZE / width, MODEL_INPUT_SIZE / height)
@@ -223,7 +239,7 @@ async function extractFramesFromVideo(
       URL.revokeObjectURL(url)
       onProgress(20, `Extracted ${frames.length} frames`)
 
-      resolve({ imageData: frames, duration, fps, width, height })
+      resolve({ imageData: frames, frameImages, frameTimestamps, duration, fps, width, height })
     })
 
     video.addEventListener('error', () => {
@@ -294,7 +310,7 @@ async function runInference(
       float32Data[2 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE + p] = imgData.data[p * 4 + 2] / 255.0  // B
     }
 
-    const inputTensor = new (ortModule!. OrtTensor)('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE])
+    const inputTensor = new ortModule.Tensor('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE])
     const feeds = { [inputName]: inputTensor }
 
     try {
@@ -880,6 +896,7 @@ function calcHipShoulderRotation(frames: FrameData[], phases: PhaseInfo): [numbe
 function calcBodyPositionAir(frames: FrameData[], phases: PhaseInfo): [number, number] {
   const n = frames.length
   const peak = phases.jumpPeak
+  const personHeight = phases.personHeight
   let bestScore = 0, bestAngle = 0
 
   for (let p = Math.max(0, peak - 3); p < Math.min(n, peak + 4); p++) {
@@ -890,27 +907,134 @@ function calcBodyPositionAir(frames: FrameData[], phases: PhaseInfo): [number, n
 
     const shoulderC = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
     const hipC = midpoint(kp[L_HIP], kp[R_HIP])
-    let torsoAngle = Math.abs(angleOfLine(shoulderC, hipC) - 90)
-    if (torsoAngle > 90) torsoAngle = 180 - torsoAngle
 
     let s = 0
-    if (torsoAngle >= 5 && torsoAngle <= 30) s += 45
-    else if (torsoAngle <= 45) s += 30
-    else s += 10
 
-    s += 25 // base for being airborne
+    // 1. Torso vertical alignment (shoulder-hip angle from vertical)
+    let torsoAngle = Math.abs(angleOfLine(shoulderC, hipC) - 90)
+    if (torsoAngle > 90) torsoAngle = 180 - torsoAngle
+    // Slight lean back (5-25°) is ideal for loading the hit
+    if (torsoAngle >= 5 && torsoAngle <= 25) s += 25
+    else if (torsoAngle <= 40) s += 15
+    else s += 5
 
-    if (kp[L_KNEE].conf > 0.3 && kp[R_KNEE].conf > 0.3) {
-      const kneeAngle = angleBetween(kp[L_HIP], kp[L_KNEE], kp[L_ANKLE])
-      if (kneeAngle > 100 && kneeAngle < 170) s += 20
-      else if (kneeAngle <= 100) s += 10
-      else s += 15
+    // 2. Knee tuck — both knees should show some bend for athletic position
+    let kneeScore = 0
+    const kneeAngles: number[] = []
+    for (const [hipI, kneeI, ankleI] of [[L_HIP, L_KNEE, L_ANKLE], [R_HIP, R_KNEE, R_ANKLE]]) {
+      if (kp[kneeI].conf > 0.3 && kp[ankleI].conf > 0.3 && kp[hipI].conf > 0.3) {
+        const angle = angleBetween(kp[hipI], kp[kneeI], kp[ankleI])
+        kneeAngles.push(angle)
+        if (angle > 90 && angle < 165) kneeScore += 15
+        else if (angle <= 90) kneeScore += 8  // very tucked, some power
+        else kneeScore += 10
+      }
+    }
+    s += kneeScore
+
+    // 3. Hip levelness — hips should be relatively level
+    if (kp[L_HIP].conf > 0.3 && kp[R_HIP].conf > 0.3) {
+      const hipDiff = Math.abs(kp[L_HIP].y - kp[R_HIP].y)
+      const hipDiffNorm = personHeight > 0 ? hipDiff / personHeight : 1
+      if (hipDiffNorm < 0.03) s += 15
+      else if (hipDiffNorm < 0.08) s += 10
+      else s += 3
+    }
+
+    // 4. Head position — nose should be roughly above shoulder center
+    if (kp[NOSE].conf > 0.3) {
+      const headOffsetX = Math.abs(kp[NOSE].x - shoulderC.x)
+      const headOffsetNorm = personHeight > 0 ? headOffsetX / personHeight : 1
+      if (headOffsetNorm < 0.05) s += 10
+      else if (headOffsetNorm < 0.12) s += 6
+      else s += 2
+    }
+
+    // 5. Non-hitting arm reaching up/blocking side (shoulder above ear level)
+    if (kp[L_SHOULDER].conf > 0.3 && kp[L_WRIST].conf > 0.3) {
+      if (kp[L_WRIST].y < kp[L_SHOULDER].y - personHeight * 0.1) s += 5
     }
 
     if (s > bestScore) { bestScore = s; bestAngle = torsoAngle }
   }
 
   return [clamp(bestScore), Math.round(bestAngle * 10) / 10]
+}
+
+function calcTorsoAngleAir(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
+  const n = frames.length
+  const peak = phases.jumpPeak
+  const personHeight = phases.personHeight
+  const hitW = isLeftHanded ? L_WRIST : R_WRIST
+
+  // Measure torso angle across the airborne phase (plant→peak→contact)
+  // Ideal: slight back arch before peak, then forward whip through contact
+  const torsoAngles: { frame: number; angle: number }[] = []
+  const searchStart = Math.max(0, phases.plantFrame)
+  const searchEnd = Math.min(n - 1, phases.followThroughEnd)
+
+  for (let i = searchStart; i <= searchEnd; i++) {
+    const kp = frames[i].keypoints
+    if (kp[L_SHOULDER].conf < 0.3 || kp[R_SHOULDER].conf < 0.3) continue
+    if (kp[L_HIP].conf < 0.3 || kp[R_HIP].conf < 0.3) continue
+
+    const shoulderC = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
+    const hipC = midpoint(kp[L_HIP], kp[R_HIP])
+    let angle = angleOfLine(shoulderC, hipC)
+    // Normalize: 0 = perfectly vertical, positive = leaning back, negative = leaning forward
+    // angleOfLine returns degrees from horizontal, so 90 = vertical
+    const deviation = 90 - angle // positive = leaning back, negative = leaning forward
+    torsoAngles.push({ frame: i, angle: deviation })
+  }
+
+  if (torsoAngles.length < 3) return [50, 0]
+
+  // Score based on the arch-to-whip transition
+  let score = 0
+
+  // 1. Check for back arch before peak
+  const prePeak = torsoAngles.filter(t => t.frame <= peak)
+  const postPeak = torsoAngles.filter(t => t.frame > peak)
+
+  const prePeakAngles = prePeak.map(t => t.angle)
+  const postPeakAngles = postPeak.map(t => t.angle)
+
+  const avgPrePeak = prePeakAngles.length > 0 ? prePeakAngles.reduce((a, b) => a + b, 0) / prePeakAngles.length : 0
+  const avgPostPeak = postPeakAngles.length > 0 ? postPeakAngles.reduce((a, b) => a + b, 0) / postPeakAngles.length : 0
+
+  // Ideal: positive lean back before peak (5-25°), then forward whip (negative or small positive)
+  // Pre-peak back arch
+  if (avgPrePeak >= 5 && avgPrePeak <= 25) score += 35
+  else if (avgPrePeak >= 0 && avgPrePeak <= 35) score += 25
+  else if (avgPrePeak > 0) score += 15
+  else score += 5
+
+  // Post-peak forward whip (angle should decrease = more forward)
+  const angleChange = avgPrePeak - avgPostPeak
+  if (angleChange >= 10 && angleChange <= 40) score += 35
+  else if (angleChange >= 5 && angleChange <= 50) score += 25
+  else if (angleChange > 0) score += 15
+  else score += 5
+
+  // Torso should not be excessively arched (>45° is dangerous)
+  const maxArch = Math.max(...torsoAngles.map(t => t.angle))
+  if (maxArch <= 35) score += 15
+  else if (maxArch <= 45) score += 10
+  else score += 0
+
+  // Smooth transition (no sudden jerks in torso angle)
+  if (torsoAngles.length >= 3) {
+    let maxChange = 0
+    for (let i = 1; i < torsoAngles.length; i++) {
+      const change = Math.abs(torsoAngles[i].angle - torsoAngles[i - 1].angle)
+      if (change > maxChange) maxChange = change
+    }
+    if (maxChange < 15) score += 15
+    else if (maxChange < 25) score += 10
+    else score += 5
+  }
+
+  return [clamp(score), Math.round(Math.abs(avgPrePeak) * 10) / 10]
 }
 
 function calcBowAndArrow(frames: FrameData[], phases: PhaseInfo, isLeftHanded: boolean): [number, number] {
@@ -1355,7 +1479,7 @@ export async function analyzeVideo(
   // ── Step 1: Smart frame extraction ──
   const TARGET_FRAMES = 24
   onProgress(3, 'Loading video...')
-  const { imageData, duration, fps, width, height } = await extractFramesFromVideo(videoFile, TARGET_FRAMES, onProgress)
+  const { imageData, frameImages, frameTimestamps, duration, fps, width, height } = await extractFramesFromVideo(videoFile, TARGET_FRAMES, onProgress)
 
   if (imageData.length < 5) {
     throw new Error(`Could not extract enough frames from the video (${imageData.length}). The video may be too short or corrupted.`)
@@ -1405,11 +1529,7 @@ export async function analyzeVideo(
     ['vertical_jump_conversion', () => calcVerticalJumpConversion(framesData, phases, fps)],
     ['hip_shoulder_rotation', () => calcHipShoulderRotation(framesData, phases)],
     ['body_position_air', () => calcBodyPositionAir(framesData, phases)],
-    ['torso_angle_air', () => {
-      // Derive from body_position_air with slight variation
-      const [bps] = calcBodyPositionAir(framesData, phases)
-      return [clamp(bps * 0.9 + 5), 0]
-    }],
+    ['torso_angle_air', () => calcTorsoAngleAir(framesData, phases, isLeftHanded)],
     ['bow_and_arrow', () => calcBowAndArrow(framesData, phases, isLeftHanded)],
     ['arm_swing_speed', () => calcArmSwingSpeed(framesData, phases, isLeftHanded, fps)],
     ['contact_point', () => calcContactPoint(framesData, phases, isLeftHanded)],
@@ -1480,10 +1600,65 @@ export async function analyzeVideo(
   const temporalKeys = new Set(['approach_speed', 'footwork_rhythm', 'arm_swing_speed', 'vertical_jump_conversion'])
   const confidence: Record<string, number> = {}
   for (const key of Object.keys(scores)) {
-    confidence[key] = key === 'torso_angle_air' ? clamp(baseConf - 25) : (temporalKeys.has(key) ? clamp(baseConf - 10) : baseConf)
+    confidence[key] = temporalKeys.has(key) ? clamp(baseConf - 10) : baseConf
   }
 
   const avgConfidence = Math.round(Object.values(confidence).reduce((s, v) => s + v, 0) / Object.keys(confidence).length)
+
+  // ── Step 8: Map checkpoints and phases to frame indices ──
+  // Map each frame (from framesData) back to the extracted frame index
+  const detectedFrameIndices = framesData.map(fd => fd.frameIdx)
+
+  // Phase → frame indices
+  const phaseFrameRanges: Record<string, [number, number]> = {
+    approach: [phases.approachStart, phases.approachEnd],
+    jump: [phases.plantFrame, phases.contactFrame],
+    contact: [phases.contactFrame, phases.contactFrame],
+    followThrough: [phases.contactFrame, phases.followThroughEnd],
+  }
+
+  const phaseFrames: Record<string, number[]> = {}
+  const checkpointFrames: Record<string, number[]> = {}
+
+  for (const [phaseKey, [start, end]] of Object.entries(phaseFrameRanges)) {
+    const indices: number[] = []
+    for (let i = 0; i < detectedFrameIndices.length; i++) {
+      const origIdx = detectedFrameIndices[i]
+      if (origIdx >= start && origIdx <= end) {
+        indices.push(origIdx)
+      }
+    }
+    phaseFrames[phaseKey] = indices
+  }
+
+  // Map each checkpoint to its phase's frames
+  const checkpointPhaseMap: Record<string, string> = {
+    approach_speed: 'approach', approach_angle: 'approach', last_step_length: 'approach',
+    footwork_rhythm: 'approach', arms_swing_back: 'approach',
+    vertical_jump_conversion: 'jump', hip_shoulder_rotation: 'jump',
+    body_position_air: 'jump', torso_angle_air: 'jump',
+    bow_and_arrow: 'contact', arm_swing_speed: 'contact',
+    contact_point: 'contact', wrist_snap: 'contact', contact_height: 'contact',
+    follow_through: 'followThrough', landing_balance: 'followThrough',
+  }
+  for (const [cpKey, phaseKey] of Object.entries(checkpointPhaseMap)) {
+    checkpointFrames[cpKey] = phaseFrames[phaseKey] || []
+  }
+
+  // Also add special targeting: for contact_point, try to include the exact contact frame
+  if (detectedFrameIndices.includes(phases.contactFrame)) {
+    if (!checkpointFrames.contact_point.includes(phases.contactFrame)) {
+      checkpointFrames.contact_point.push(phases.contactFrame)
+    }
+  }
+  // For body_position_air and torso_angle_air, include peak-adjacent frames
+  for (const cp of ['body_position_air', 'torso_angle_air']) {
+    const peakFrames = detectedFrameIndices.filter(i => Math.abs(i - phases.jumpPeak) <= 3)
+    for (const pf of peakFrames) {
+      if (!checkpointFrames[cp].includes(pf)) checkpointFrames[cp].push(pf)
+    }
+    checkpointFrames[cp].sort((a, b) => a - b)
+  }
 
   onProgress(95, 'Finalizing analysis...')
 
@@ -1506,6 +1681,10 @@ export async function analyzeVideo(
       quality: avgConfidence >= 60 ? 'high' as const : avgConfidence >= 30 ? 'medium' as const : 'low' as const,
       analysisMethod: 'YOLOv8 Pose (Browser ONNX/WASM)',
     },
+    frames: frameImages,
+    frameTimestamps: frameTimestamps,
+    checkpointFrames,
+    phaseFrames,
   }
 
   onProgress(100, 'Analysis complete!')
