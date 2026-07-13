@@ -7,6 +7,7 @@ import {
   Activity, Dumbbell, CheckCircle2, AlertTriangle,
   RotateCcw, ChevronRight, Upload, ArrowRight
 } from 'lucide-react'
+import { analyzeVideo } from '@/lib/spike-analyzer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -98,22 +99,24 @@ export default function SpikeApp() {
     setError(null)
     setAnalysis(null)
     setTrainingPlan(null)
-    setProgressStep('starting')
+    setProgressStep('analyzing')
     setProgressMsg('')
     setProgressPct(0)
 
     try {
-      console.log('[SpikeLab Client] Starting browser-based YOLOv8 analysis...')
-
-      const result = await analyzeVideoInBrowser(videoFile, (msg: string, pct: number) => {
-        setProgressMsg(msg)
+      console.log('[SpikeLab Client] Starting browser-side analysis...')
+      const result = await analyzeVideo(videoFile, (pct, msg) => {
         setProgressPct(pct)
+        if (msg) setProgressMsg(msg)
         if (pct < 20) setProgressStep('starting')
-        else if (pct < 60) setProgressStep('analyzing')
-        else if (pct < 90) setProgressStep('generating')
+        else if (pct < 55) setProgressStep('analyzing')
+        else if (pct < 85) setProgressStep('generating')
         else setProgressStep('finalizing')
       })
 
+      if (!result?.scores || !result?.phaseAnalysis) {
+        throw new Error(t().errors.unexpectedFormat)
+      }
       console.log('[SpikeLab Client] Analysis complete, switching tab')
       setAnalysis(result)
       setActiveTab('analysis')
