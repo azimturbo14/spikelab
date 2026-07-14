@@ -523,22 +523,34 @@ function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
 // ─── ONNX Inference (Batch) ───────────────────────────────────────────────────
 
 /**
- * Run ONNX inference on all pre-extracted frames.
- * This is the core replacement: instead of the Python script running
- * model(frame) one at a time in a while loop, we process all frames
- * efficiently through the WASM runtime.
+ * A single person detection in one frame (before tracking).
  */
+interface PersonDetection {
+  conf: number
+  bbox: [number, number, number, number]  // xyxy in video coords
+  keypoints: Keypoint[]
+  center: { x: number; y: number }       // centroid of shoulders/hips
+  area: number                            // bbox area in video coords
+}
+
+/**
+ * Run ONNX inference on all pre-extracted frames.
+ * Collects ALL person detections per frame (up to MAX_PER_FRAME) for multi-person tracking.
+ */
+const MAX_PER_FRAME = 5
+
 async function runInference(
   frames: ImageData[],
   videoWidth: number,
   videoHeight: number,
   onProgress: ProgressCallback,
   msg?: ProgressMessages
-): Promise<FrameData[]> {
+): Promise<PersonDetection[][]> {
   const session = await getOrtSession() as any
   const inputName = session.inputNames[0]
 
-  const allFramesData: FrameData[] = []
+  // One entry per frame, each containing all person detections in that frame
+  const allDetections: PersonDetection[][] = []
   const totalFrames = frames.length
 
   // Calculate letterbox scale/offset to map detections back to original coords
@@ -562,6 +574,8 @@ async function runInference(
     const inputTensor = new ((globalThis as any).ort.Tensor)('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE])
     const feeds = { [inputName]: inputTensor }
 
+    const frameDetections: PersonDetection[] = []
+
     try {
       const results = await session.run(feeds)
       const outputKey = session.outputNames[0]
@@ -570,39 +584,48 @@ async function runInference(
       // Output shape: [1, 56, 8400] for YOLOv8n-pose
       const data = output.data as Float32Array
       const dims = output.dims as number[] // [1, 56, 8400]
-
-      // Transpose to [8400, 56] for easier access
       const numDetections = dims[2]
-      const numChannels = dims[1]
 
-      // Find best person detection
-      let bestIdx = -1
-      let bestScore = 0
+      // Collect ALL valid person detections
+      const candidates: { idx: number; conf: number; area: number }[] = []
 
       for (let d = 0; d < numDetections; d++) {
-        const objConf = data[d + numDetections * 4] // channel 4 = objectness
-        if (objConf < 0.25) continue
+        const objConf = data[d + numDetections * 4]
+        if (objConf < 0.15) continue
 
-        // Check if this is a person (class 0 in COCO)
         const clsConf = data[d + numDetections * 5]
         const conf = objConf * clsConf
-        if (conf < 0.25 || conf <= bestScore) continue
+        if (conf < 0.15) continue
 
-        // Quick check: at least some keypoints visible
+        // Quick check: at least 3 keypoints visible
         let kpVisible = 0
         for (let k = 0; k < NUM_KEYPOINTS; k++) {
           const kpConf = data[d + numDetections * (6 + k * 3 + 2)]
-          if (kpConf > 0.3) kpVisible++
+          if (kpConf > 0.2) kpVisible++
         }
-        if (kpVisible < 5) continue
+        if (kpVisible < 3) continue
 
-        bestScore = conf
-        bestIdx = d
+        // Compute bbox area for size preference
+        const cx = data[d]
+        const cy = data[d + numDetections]
+        const w = data[d + numDetections * 2]
+        const h = data[d + numDetections * 3]
+        const mapX = (v: number) => (v - padX) / scale
+        const mapY = (v: number) => (v - padY) / scale
+        const vw = w / scale
+        const vh = h / scale
+        const area = vw * vh
+
+        candidates.push({ idx: d, conf, area })
       }
 
-      if (bestIdx >= 0) {
-        const d = bestIdx
-        // BBox (center format → xyxy)
+      // Sort by confidence descending, take top MAX_PER_FRAME
+      candidates.sort((a, b) => b.conf - a.conf)
+      const topCandidates = candidates.slice(0, MAX_PER_FRAME)
+
+      // Extract full detection data for each candidate
+      for (const cand of topCandidates) {
+        const d = cand.idx
         const cx = data[d]
         const cy = data[d + numDetections]
         const w = data[d + numDetections * 2]
@@ -612,36 +635,52 @@ async function runInference(
         const x2 = cx + w / 2
         const y2 = cy + h / 2
 
-        // Map from 640x640 to original video coords
         const mapX = (v: number) => (v - padX) / scale
         const mapY = (v: number) => (v - padY) / scale
 
-        const bbox = [mapX(x1), mapY(y1), mapX(x2), mapY(y2)]
+        const bbox: [number, number, number, number] = [mapX(x1), mapY(y1), mapX(x2), mapY(y2)]
 
-        // Extract keypoints
         const keypoints: Keypoint[] = []
         for (let k = 0; k < NUM_KEYPOINTS; k++) {
           const kpx = data[d + numDetections * (6 + k * 3)]
           const kpy = data[d + numDetections * (6 + k * 3 + 1)]
           const kpc = data[d + numDetections * (6 + k * 3 + 2)]
-          keypoints.push({
-            x: mapX(kpx),
-            y: mapY(kpy),
-            conf: kpc,
-          })
+          keypoints.push({ x: mapX(kpx), y: mapY(kpy), conf: kpc })
         }
 
-        allFramesData.push({
-          frameIdx: fi,
-          keypoints,
-          detConf: bestScore,
+        // Compute centroid from visible keypoints (shoulders + hips preferred)
+        let cxSum = 0, cySum = 0, cCount = 0
+        const centerKps = [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP]
+        for (const ki of centerKps) {
+          if (keypoints[ki].conf > 0.2) {
+            cxSum += keypoints[ki].x
+            cySum += keypoints[ki].y
+            cCount++
+          }
+        }
+        // Fallback to nose if no shoulder/hip visible
+        if (cCount === 0 && keypoints[NOSE].conf > 0.2) {
+          cxSum = keypoints[NOSE].x
+          cySum = keypoints[NOSE].y
+          cCount = 1
+        }
+        const center = cCount > 0
+          ? { x: cxSum / cCount, y: cySum / cCount }
+          : { x: (bbox[0] + bbox[2]) / 2, y: (bbox[1] + bbox[3]) / 2 }
+
+        frameDetections.push({
+          conf: cand.conf,
           bbox,
-          timestamp: 0, // will be set later
+          keypoints,
+          center,
+          area: cand.area,
         })
       }
     } catch (err) {
       console.warn(`[SpikeLab] Inference failed on frame ${fi}:`, err)
     }
+
+    allDetections.push(frameDetections)
 
     // Progress: 20% → 55%
     const pct = 20 + Math.round((fi / totalFrames) * 35)
@@ -653,32 +692,134 @@ async function runInference(
     }
   }
 
-  return allFramesData
+  return allDetections
 }
 
 // ─── Player Tracking ──────────────────────────────────────────────────────────
 
-function trackPlayer(frames: FrameData[]): FrameData[] {
-  if (frames.length <= 1) return frames
+/**
+ * Centroid-based multi-person tracker.
+ * 
+ * Strategy:
+ * 1. Pick the LARGEST person in the first frame as the target (closest to camera = main subject)
+ * 2. For each subsequent frame, find the detection closest to the previous tracked center
+ * 3. Use a max distance threshold (proportional to person size) to reject wrong-person jumps
+ * 4. If no close match, try the largest detection (handles brief occlusions)
+ * 5. If still no match, reuse previous frame's keypoints (will be interpolated)
+ */
+function trackPlayer(allDetections: PersonDetection[][]): FrameData[] {
+  const totalFrames = allDetections.length
+  if (totalFrames === 0) return []
 
+  const result: FrameData[] = []
   let prevCenter: { x: number; y: number } | null = null
-  const tracked: FrameData[] = []
+  let prevBboxArea = 0
+  // Running average center for smoother tracking
+  let smoothCenter: { x: number; y: number } | null = null
+  let estimatedPersonHeight = 200  // will be calibrated from first good detection
 
-  for (const fd of frames) {
-    const kp = fd.keypoints
-    let center: { x: number; y: number } | null = null
-
-    if (kp[L_SHOULDER].conf > 0.3 && kp[R_SHOULDER].conf > 0.3) {
-      center = midpoint(kp[L_SHOULDER], kp[R_SHOULDER])
-    } else if (kp[L_HIP].conf > 0.3 && kp[R_HIP].conf > 0.3) {
-      center = midpoint(kp[L_HIP], kp[R_HIP])
+  for (let fi = 0; fi < totalFrames; fi++) {
+    const detections = allDetections[fi]
+    
+    if (detections.length === 0) {
+      // No detections in this frame — reuse previous keypoints
+      if (result.length > 0) {
+        const prev = result[result.length - 1]
+        result.push({
+          frameIdx: fi,
+          keypoints: prev.keypoints.map(k => ({ ...k, conf: 0.1 })),  // low confidence = will be interpolated
+          detConf: 0,
+          bbox: prev.bbox,
+          timestamp: 0,
+        })
+      }
+      continue
     }
 
-    if (center) prevCenter = center
-    tracked.push(fd)
+    let chosen: PersonDetection
+
+    if (fi === 0 || !prevCenter) {
+      // First frame or no previous: pick the LARGEST person (closest to camera)
+      chosen = detections.reduce((best, d) => d.area > best.area ? d : best, detections[0])
+    } else {
+      // Find the detection closest to the previous tracked center
+      const maxDist = estimatedPersonHeight * 0.5  // max 50% of body height between frames
+      
+      let bestDist = Infinity
+      let bestDet: PersonDetection | null = null
+
+      for (const det of detections) {
+        const dd = dist(det.center, prevCenter)
+        if (dd < bestDist) {
+          bestDist = dd
+          bestDet = det
+        }
+      }
+
+      if (bestDet && bestDist <= maxDist) {
+        chosen = bestDet
+      } else {
+        // No close match — try the largest detection (handles brief occlusion or person crossing)
+        const largest = detections.reduce((best, d) => d.area > best.area ? d : best, detections[0])
+        
+        // Only accept if similar size to the tracked person (within 3x)
+        if (largest.area >= prevBboxArea * 0.3 && largest.area <= prevBboxArea * 3) {
+          chosen = largest
+        } else {
+          // Size mismatch too large — probably wrong person, reuse previous
+          if (result.length > 0) {
+            const prev = result[result.length - 1]
+            result.push({
+              frameIdx: fi,
+              keypoints: prev.keypoints.map(k => ({ ...k, conf: 0.1 })),
+              detConf: 0,
+              bbox: prev.bbox,
+              timestamp: 0,
+            })
+            continue
+          } else {
+            chosen = largest  // fallback for first frame
+          }
+        }
+      }
+    }
+
+    // Update estimated person height from hip-to-shoulder distance
+    const kp = chosen.keypoints
+    if (kp[L_SHOULDER].conf > 0.2 && kp[L_HIP].conf > 0.2) {
+      const shoulderHip = dist(kp[L_SHOULDER], kp[L_HIP])
+      if (shoulderHip > 30) {
+        // Full body height ≈ 2.5x shoulder-to-hip
+        const estHeight = shoulderHip * 2.5
+        if (estimatedPersonHeight === 200 || estHeight > 50) {
+          estimatedPersonHeight = estHeight
+        }
+      }
+    }
+
+    // Smooth the center for next frame's matching (reduces jitter)
+    if (smoothCenter) {
+      smoothCenter = {
+        x: smoothCenter.x * 0.3 + chosen.center.x * 0.7,
+        y: smoothCenter.y * 0.3 + chosen.center.y * 0.7,
+      }
+    } else {
+      smoothCenter = { ...chosen.center }
+    }
+    prevCenter = smoothCenter
+    prevBboxArea = chosen.area
+
+    result.push({
+      frameIdx: fi,
+      keypoints: chosen.keypoints,
+      detConf: chosen.conf,
+      bbox: chosen.bbox,
+      timestamp: 0,
+    })
   }
 
-  return tracked
+  console.log(`[SpikeLab] Tracked ${result.length}/${totalFrames} frames (multi-person filter)`)
+  return result
 }
 
 // ─── Keypoint Smoothing ───────────────────────────────────────────────────────
@@ -2028,17 +2169,17 @@ export async function analyzeVideo(
 
   // ── Step 2: ONNX inference on all frames ──
   onProgress(20, m?.loadingModel ?? 'Loading AI model...')
-  let framesData = await runInference(imageData, width, height, onProgress, m)
+  const allDetections = await runInference(imageData, width, height, onProgress, m)
 
-  if (framesData.length < 3) {
+  if (allDetections.filter(d => d.length > 0).length < 3) {
     throw new Error('Could not detect a person in enough frames. Make sure the video clearly shows a volleyball player spiking.')
   }
 
-  console.log(`[SpikeLab] Detected person in ${framesData.length}/${imageData.length} frames`)
+  console.log(`[SpikeLab] Detected persons in ${allDetections.filter(d => d.length > 0).length}/${imageData.length} frames`)
 
-  // ── Step 3: Post-processing ──
+  // ── Step 3: Track the primary person across frames ──
   onProgress(58, m?.trackingPlayer ?? 'Tracking player & smoothing keypoints...')
-  framesData = trackPlayer(framesData)
+  let framesData = trackPlayer(allDetections)
   framesData = interpolateMissing(framesData)
   framesData = smoothKeypoints(framesData, 3)
 

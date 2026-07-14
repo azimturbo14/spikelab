@@ -338,3 +338,33 @@ Stage Summary:
 - Tutorial videos: automatically trimmed to exercise instance (no intros/outros analyzed)
 - Stepper tabs: consistent height (h-10), centered layout, fixed connector widths
 - Quality banner: shows "action: Xs – Ys" timestamps
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix language switch not affecting all UI parts + fix multi-person tracking inaccuracy
+
+Work Log:
+- Audited all components for hardcoded English strings not using i18n
+- Added 15+ new i18n keys to all 3 languages (en, ru, uz): notApplicable, relatedFrames, phaseBreakdownTitle, framesBadge, phaseSuffix, actionLabel, confidenceHigh/Low/NotVisible, levelFallback, renderingError/Hint, progress messages (14 keys with dynamic params)
+- Updated AnalysisView.tsx: quality banner stats, N/A label, Phase Breakdown title, frames badge, phase suffix, Related frames label, confidence labels (replaced getConfidenceLabel import with inline t() calls), checkpoint labels in phase cards now use t().checkpoints consistently
+- Updated SpikeApp.tsx error boundary to use i18n (reads lang from localStorage since class components can't use hooks)
+- Updated spike-analyzer.ts: added ProgressMessages type, all progress messages accept translated versions with English fallback
+- Progress messages thread through: analyzeVideo → extractFramesFromVideo → extractFramesAtTimestamps, analyzeVideo → runInference
+- SpikeApp now passes t().progress to analyzeVideo()
+
+- ROOT CAUSE FIX for multi-person inaccuracy:
+  - runInference was rewritten to return PersonDetection[][] (all detections per frame, not just best one)
+  - Lowered detection thresholds from 0.25 to 0.15 for multi-person collection
+  - trackPlayer completely rewritten with centroid-based identity tracking:
+    - Picks LARGEST person in first frame (closest to camera = main subject)
+    - For each subsequent frame, finds detection closest to previous tracked center
+    - Max distance threshold proportional to estimated person height (50%)
+    - Size comparison rejects wrong-person jumps (must be within 3x bbox area)
+    - No-match frames reuse previous keypoints (will be interpolated)
+    - Running average center smoothing reduces jitter
+  - analyzeVideo updated to call trackPlayer(allDetections) instead of trackPlayer(framesData)
+
+Stage Summary:
+- All visible UI text now translates correctly when switching languages (EN/RU/UZ)
+- Multi-person videos now consistently track the same person across all frames
+- Frame display accuracy improved because phase detection now operates on consistent person tracking
