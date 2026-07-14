@@ -19,7 +19,6 @@ import {
   type SpikeAnalysis,
   CHECKPOINT_LABELS,
   getScoreColor,
-  getConfidenceLabel,
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
 
@@ -380,7 +379,7 @@ export default function AnalysisView({
             <AnimatedScoreRing score={overallAvg} />
             <div className="text-center sm:text-left flex-1">
               <div className="flex items-center gap-2 mb-2 flex-wrap justify-center sm:justify-start">
-                <Badge variant="secondary">{analysis.estimatedLevel || 'intermediate'}</Badge>
+                <Badge variant="secondary">{analysis.estimatedLevel || t().analysis.levelFallback}</Badge>
                 <Badge variant="outline" className="text-xs font-normal">
                   <Target className="w-3 h-3 mr-1" />
                   {t().analysis.analysisMethod}
@@ -409,11 +408,11 @@ export default function AnalysisView({
                   {meta.averageConfidence && meta.averageConfidence >= 60 ? t().analysis.qualityHigh : meta.averageConfidence && meta.averageConfidence >= 30 ? t().analysis.qualityMedium : t().analysis.qualityLow}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {meta.frameCount && <span>{meta.frameCount} frames analyzed</span>}
-                  {meta.averageConfidence !== undefined && <span> · avg confidence: {meta.averageConfidence}%</span>}
-                  {meta.framesWithPlayer !== undefined && <span> · {meta.framesWithPlayer}/{meta.frameCount} frames show the player</span>}
+                  {meta.frameCount && <span>{meta.frameCount} {t().analysis.framesExtracted}</span>}
+                  {meta.averageConfidence !== undefined && <span> · {t().analysis.avgConfidence}: {meta.averageConfidence}%</span>}
+                  {meta.framesWithPlayer !== undefined && <span> · {meta.framesWithPlayer}/{meta.frameCount} {t().analysis.framesWithPlayer}</span>}
                   {meta.actionWindowStart !== undefined && meta.actionWindowEnd !== undefined && (
-                    <span> · action: {meta.actionWindowStart}s – {meta.actionWindowEnd}s</span>
+                    <span> · {t().analysis.actionLabel}: {meta.actionWindowStart.toFixed(1)}s – {meta.actionWindowEnd.toFixed(1)}s</span>
                   )}
                 </p>
               </div>
@@ -455,7 +454,7 @@ export default function AnalysisView({
               {needsImprovement && (
                 <div className="mt-3 space-y-2">
                   {weakCps.map(cpKey => {
-                    const cpLabel = CHECKPOINT_LABELS[cpKey as keyof typeof CHECKPOINT_LABELS]?.label ?? cpKey
+                    const cpLabel = checkpoints[cpKey as keyof typeof checkpoints] ?? cpKey
                     const cpScore = (analysis.scores as Record<string, number>)[cpKey] ?? 0
                     const cpConf = conf ? (conf as Record<string, number>)[cpKey] ?? 0 : 100
                     if (cpConf < 26) return null // Skip if not visible
@@ -508,7 +507,10 @@ export default function AnalysisView({
                     const cpKey = key as keyof typeof CHECKPOINT_LABELS
                     const cpLabel = CHECKPOINT_LABELS[cpKey]
                     const confVal = conf ? (conf as Record<string, number>)[key] ?? 0 : 100
-                    const confInfo = getConfidenceLabel(confVal)
+                    const confInfo = {
+                      label: confVal >= 51 ? t().analysis.confidenceHigh : confVal >= 26 ? t().analysis.confidenceLow : t().analysis.confidenceNotVisible,
+                      color: confVal >= 51 ? 'text-emerald-600' : confVal >= 26 ? 'text-amber-600' : 'text-muted-foreground',
+                    }
                     const isNA = (score as number) === 0 && confVal === 0
                     const isTemporal = cpLabel?.isTemporal ?? false
                     const opacity = confVal < 26 ? 'opacity-40' : confVal < 51 ? 'opacity-60' : ''
@@ -534,7 +536,7 @@ export default function AnalysisView({
                               </Tooltip>
                             )}
                             {isNA ? (
-                              <span className="text-xs italic text-muted-foreground">N/A</span>
+                              <span className="text-xs italic text-muted-foreground">{t().analysis.notApplicable}</span>
                             ) : (
                               <>
                                 <span className={`text-sm font-semibold ${getScoreColor(score as number)}`}>{score}</span>
@@ -607,7 +609,7 @@ export default function AnalysisView({
                       frames={analysis.frames!}
                       frameIndices={frameIndices}
                       frameTimestamps={analysis.frameTimestamps}
-                      label={cpKey ? CHECKPOINT_LABELS[cpKey as keyof typeof CHECKPOINT_LABELS]?.label ?? cpKey : 'Related frames'}
+                      label={cpKey ? (checkpoints[cpKey as keyof typeof checkpoints] ?? cpKey) : t().analysis.relatedFrames}
                     />
                   )}
                 </li>
@@ -623,7 +625,7 @@ export default function AnalysisView({
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
               <Film className="w-5 h-5" />
-              Phase Breakdown — Key Frames
+              {t().analysis.phaseBreakdownTitle}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -636,14 +638,14 @@ export default function AnalysisView({
                     <Icon className={`w-4 h-4 ${color}`} />
                     <h4 className="text-sm font-semibold">{label}</h4>
                     <Badge variant="secondary" className="text-[10px]">
-                      {phaseFrameIndices.length} frames
+                      {phaseFrameIndices.length} {t().analysis.framesBadge}
                     </Badge>
                   </div>
                   <FrameCarousel
                     frames={analysis.frames!}
                     frameIndices={phaseFrameIndices}
                     frameTimestamps={analysis.frameTimestamps}
-                    label={`${label} phase`}
+                    label={`${label} ${t().analysis.phaseSuffix.toLowerCase()}`}
                   />
                 </div>
               )

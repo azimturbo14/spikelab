@@ -265,7 +265,8 @@ function loadVideo(videoFile: File): Promise<{ video: HTMLVideoElement; url: str
  */
 async function extractFramesFromVideo(
   videoFile: File,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  msg?: ProgressMessages
 ): Promise<FrameExtractionResult> {
   const SCAN_FRAMES = 40
   const DENSE_FPS = 10  // sample rate for dense pass
@@ -276,7 +277,7 @@ async function extractFramesFromVideo(
   const { video, url, duration, width, height } = await loadVideo(videoFile)
   const fps = 30
 
-  onProgress(5, `Video loaded: ${duration.toFixed(1)}s, ${width}x${height}`)
+  onProgress(5, msg?.videoLoaded(duration.toFixed(1), width, height) ?? `Video loaded: ${duration.toFixed(1)}s, ${width}x${height}`)
 
   // ── Pass 1: Quick scan across the ENTIRE video ──
   const scanTimestamps: number[] = []
@@ -288,14 +289,14 @@ async function extractFramesFromVideo(
     scanTimestamps.push(t)
   }
 
-  onProgress(8, `Scanning video for action window...`)
+  onProgress(8, msg?.scanningForAction ?? 'Scanning video for action window...')
   const scanResult = await extractFramesAtTimestamps(
     video, scanTimestamps, width, height, onProgress,
-    [8, 14], 'Scanning for action...'
+    [8, 14], msg?.scanningAction ?? 'Scanning for action...'
   )
 
   // ── Run quick inference on scan frames ──
-  onProgress(14, 'Detecting exercise instance...')
+  onProgress(14, msg?.detectingExercise ?? 'Detecting exercise instance...')
   const session = await getOrtSession() as any
   const inputName = session.inputNames[0]
 
@@ -323,7 +324,7 @@ async function extractFramesFromVideo(
     // Yield to browser event loop every 3 frames to prevent "Page Unresponsive"
     if (fi % 3 === 2) {
       await new Promise(r => setTimeout(r, 0))
-      onProgress(14 + Math.round((fi / scanResult.imageData.length) * 2), 'Detecting exercise instance...')
+      onProgress(14 + Math.round((fi / scanResult.imageData.length) * 2), msg?.detectingExercise ?? 'Detecting exercise instance...')
     }
   }
 
@@ -388,7 +389,7 @@ async function extractFramesFromVideo(
   }
 
   console.log(`[SpikeLab] Action window: ${actionStart.toFixed(2)}s - ${actionEnd.toFixed(2)}s (${(actionEnd - actionStart).toFixed(2)}s of ${duration.toFixed(2)}s total)`)
-  onProgress(16, `Found action: ${(actionEnd - actionStart).toFixed(1)}s`)
+  onProgress(16, msg?.foundAction((actionEnd - actionStart).toFixed(1)) ?? `Found action: ${(actionEnd - actionStart).toFixed(1)}s`)
 
   // ── Pass 2: Dense frame extraction from action window ──
   const actionDuration = actionEnd - actionStart
@@ -402,14 +403,14 @@ async function extractFramesFromVideo(
     denseTimestamps.push(t)
   }
 
-  onProgress(17, `Extracting ${denseCount} frames from action window...`)
+  onProgress(17, msg?.extractingFrames(denseCount) ?? `Extracting ${denseCount} frames from action window...`)
   const denseResult = await extractFramesAtTimestamps(
     video, denseTimestamps, width, height, onProgress,
-    [17, 20], 'Extracting action frames...'
+    [17, 20], msg?.extractingAction ?? 'Extracting action frames...'
   )
 
   URL.revokeObjectURL(url)
-  onProgress(20, `Extracted ${denseResult.imageData.length} frames from action window`)
+  onProgress(20, msg?.extractedFrames(denseResult.imageData.length) ?? `Extracted ${denseResult.imageData.length} frames from action window`)
 
   return {
     imageData: denseResult.imageData,
@@ -531,7 +532,8 @@ async function runInference(
   frames: ImageData[],
   videoWidth: number,
   videoHeight: number,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  msg?: ProgressMessages
 ): Promise<FrameData[]> {
   const session = await getOrtSession() as any
   const inputName = session.inputNames[0]
@@ -643,7 +645,7 @@ async function runInference(
 
     // Progress: 20% → 55%
     const pct = 20 + Math.round((fi / totalFrames) * 35)
-    onProgress(pct, `Analyzing poses... (${fi + 1}/${totalFrames})`)
+    onProgress(pct, msg?.analyzingPoses(fi + 1, totalFrames) ?? `Analyzing poses... (${fi + 1}/${totalFrames})`)
 
     // Yield to browser event loop every 2 frames to prevent "Page Unresponsive"
     if (fi % 2 === 1) {
@@ -2006,23 +2008,27 @@ function estimateApproachSpeedLabel(score: number): string {
  * 4. Applies smoothing + interpolation on keypoints
  * 5. Runs all 16 biomechanical scores on the smoothed data
  */
+export type ProgressMessages = typeof import('./i18n').translations.en.progress
+
 export async function analyzeVideo(
   videoFile: File,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  msg?: ProgressMessages
 ): Promise<SpikeAnalysis> {
+  const m = msg
   console.log(`[SpikeLab] Starting browser analysis: ${videoFile.name} (${(videoFile.size / 1024 / 1024).toFixed(1)}MB)`)
 
   // ── Step 1: Two-pass frame extraction (scan → dense) ──
-  onProgress(3, 'Loading video...')
-  const { imageData, frameImages, frameTimestamps, duration, fps, width, height, actionWindowStart, actionWindowEnd } = await extractFramesFromVideo(videoFile, onProgress)
+  onProgress(3, m?.loadingVideo ?? 'Loading video...')
+  const { imageData, frameImages, frameTimestamps, duration, fps, width, height, actionWindowStart, actionWindowEnd } = await extractFramesFromVideo(videoFile, onProgress, m)
 
   if (imageData.length < 5) {
     throw new Error(`Could not extract enough frames from the video (${imageData.length}). The video may be too short or corrupted.`)
   }
 
   // ── Step 2: ONNX inference on all frames ──
-  onProgress(20, 'Loading AI model...')
-  let framesData = await runInference(imageData, width, height, onProgress)
+  onProgress(20, m?.loadingModel ?? 'Loading AI model...')
+  let framesData = await runInference(imageData, width, height, onProgress, m)
 
   if (framesData.length < 3) {
     throw new Error('Could not detect a person in enough frames. Make sure the video clearly shows a volleyball player spiking.')
@@ -2031,7 +2037,7 @@ export async function analyzeVideo(
   console.log(`[SpikeLab] Detected person in ${framesData.length}/${imageData.length} frames`)
 
   // ── Step 3: Post-processing ──
-  onProgress(58, 'Tracking player & smoothing keypoints...')
+  onProgress(58, m?.trackingPlayer ?? 'Tracking player & smoothing keypoints...')
   framesData = trackPlayer(framesData)
   framesData = interpolateMissing(framesData)
   framesData = smoothKeypoints(framesData, 3)
@@ -2047,12 +2053,12 @@ export async function analyzeVideo(
   console.log(`[SpikeLab] ${isLeftHanded ? 'Left' : 'Right'}-handed player detected`)
 
   // ── Step 5: Phase detection ──
-  onProgress(62, 'Detecting spike phases...')
+  onProgress(62, m?.detectingPhases ?? 'Detecting spike phases...')
   const phases = detectPhases(framesData, fps, isLeftHanded)
   console.log(`[SpikeLab] Phases: plant=${phases.plantFrame}, peak=${phases.jumpPeak}, contact=${phases.contactFrame}`)
 
   // ── Step 6: Calculate all 16 biomechanical scores ──
-  onProgress(65, 'Calculating biomechanical metrics...')
+  onProgress(65, m?.calculatingMetrics ?? 'Calculating biomechanical metrics...')
   const scores: Record<string, number> = {}
 
   const calcFns: [string, () => [number, number]][] = [
@@ -2079,7 +2085,7 @@ export async function analyzeVideo(
     scores[key] = score
   }
 
-  onProgress(80, 'Generating coaching feedback...')
+  onProgress(80, m?.generatingFeedback ?? 'Generating coaching feedback...')
 
   // ── Step 7: Phase analysis ──
   const approachScore = Math.round((scores.approach_speed + scores.approach_angle + scores.last_step_length + scores.footwork_rhythm + scores.arms_swing_back) / 5)
@@ -2225,7 +2231,7 @@ export async function analyzeVideo(
     checkpointFrames[cp].sort((a, b) => a - b)
   }
 
-  onProgress(95, 'Finalizing analysis...')
+  onProgress(95, m?.finalizing ?? 'Finalizing analysis...')
 
   const analysis: SpikeAnalysis = {
     scores: scores as unknown as CheckpointScores,
@@ -2254,7 +2260,7 @@ export async function analyzeVideo(
     phaseFrames,
   }
 
-  onProgress(100, 'Analysis complete!')
+  onProgress(100, m?.analysisComplete ?? 'Analysis complete!')
 
   console.log(`[SpikeLab] Analysis complete. Overall: ${overallPower}, Level: ${level}, Frames: ${framesData.length}`)
   return analysis

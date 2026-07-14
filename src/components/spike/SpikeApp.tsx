@@ -25,17 +25,18 @@ import {
   type PlayerProfile,
 } from '@/lib/spike-types'
 import { useI18n } from '@/lib/i18n-store'
+import { translations, type Lang } from '@/lib/i18n'
 
 type TabState = 'upload' | 'analysis' | 'training'
 
 /* ─── Analysis Error Boundary ────────────────────────────────── */
 interface ErrorBoundaryProps { children: ReactNode; onError: (msg: string) => void }
-interface ErrorBoundaryState { hasError: boolean; error: string | null }
+interface ErrorBoundaryState { hasError: boolean; error: string | null; lang: string }
 class AnalysisErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) { super(props); this.state = { hasError: false, error: null } }
+  constructor(props: ErrorBoundaryProps) { super(props); this.state = { hasError: false, error: null, lang: '' } }
   static getDerivedStateFromError(err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    return { hasError: true, error: msg }
+    return { hasError: true, error: msg, lang: (typeof window !== 'undefined' ? localStorage.getItem('spikelab-lang') : null) || 'en' }
   }
   componentDidCatch(err: unknown, info: ErrorInfo) {
     console.error('[SpikeLab] AnalysisView render error:', err, info.componentStack)
@@ -43,12 +44,13 @@ class AnalysisErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
   }
   render() {
     if (this.state.hasError) {
+      const t = translations[this.state.lang as Lang]
       return (
         <div className="bg-destructive/10 text-destructive rounded-lg p-6 text-center">
           <AlertTriangle className="w-8 h-8 mx-auto mb-3" />
-          <p className="font-medium mb-1">Rendering Error</p>
+          <p className="font-medium mb-1">{t.errors.renderingError}</p>
           <p className="text-sm text-destructive/80 mb-3">{this.state.error}</p>
-          <p className="text-xs text-muted-foreground">Please try again with a different video.</p>
+          <p className="text-xs text-muted-foreground">{t.errors.renderingErrorHint}</p>
         </div>
       )
     }
@@ -111,7 +113,7 @@ export default function SpikeApp() {
         else if (pct < 55) setProgressStep('analyzing')
         else if (pct < 85) setProgressStep('generating')
         else setProgressStep('finalizing')
-      })
+      }, t().progress)
 
       if (!result?.scores || !result?.phaseAnalysis) {
         throw new Error(t().errors.unexpectedFormat)
