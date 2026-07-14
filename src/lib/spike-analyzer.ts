@@ -319,6 +319,12 @@ async function extractFramesFromVideo(
       scanMotion.push(0)
       prevHipX = null
     }
+
+    // Yield to browser event loop every 3 frames to prevent "Page Unresponsive"
+    if (fi % 3 === 2) {
+      await new Promise(r => setTimeout(r, 0))
+      onProgress(14 + Math.round((fi / scanResult.imageData.length) * 2), 'Detecting exercise instance...')
+    }
   }
 
   // ── Find action window ──
@@ -638,6 +644,11 @@ async function runInference(
     // Progress: 20% → 55%
     const pct = 20 + Math.round((fi / totalFrames) * 35)
     onProgress(pct, `Analyzing poses... (${fi + 1}/${totalFrames})`)
+
+    // Yield to browser event loop every 2 frames to prevent "Page Unresponsive"
+    if (fi % 2 === 1) {
+      await new Promise(r => setTimeout(r, 0))
+    }
   }
 
   return allFramesData
