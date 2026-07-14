@@ -939,7 +939,7 @@ function calcApproachSpeed(frames: FrameData[], phases: PhaseInfo, fps: number):
 
   // Require sufficient hip keypoint confidence during approach
   const approachConf = avgKpConf(frames, phases.approachStart, phases.approachEnd, [L_HIP, R_HIP])
-  if (approachConf < 0.25) return [0, 0]
+  if (approachConf < 0.12) return [0, 0]
 
   const totalDist = Math.abs(xs[xs.length - 1] - xs[0])
   const dt = xs.length / fps
@@ -965,7 +965,7 @@ function calcApproachAngle(frames: FrameData[], phases: PhaseInfo): [number, num
 
   // Confidence check
   const conf = avgKpConf(frames, asStart, plant, [L_HIP, R_HIP])
-  if (conf < 0.25) return [0, 0]
+  if (conf < 0.12) return [0, 0]
 
   const startX = (phases.hipXs[asStart] ?? 0) as number
   const startY = phases.hipYs[asStart]
@@ -1013,7 +1013,7 @@ function calcLastStepLength(frames: FrameData[], phases: PhaseInfo): [number, nu
     confSum += frames[fi].keypoints[L_ANKLE].conf + frames[fi].keypoints[R_ANKLE].conf
     confCount += 2
   }
-  if (confCount > 0 && confSum / confCount < 0.2) return [0, 0]
+  if (confCount > 0 && confSum / confCount < 0.1) return [0, 0]
 
   // Detect foot plants (local maxima in Y = foot on ground)
   const yVals = anklePositions.map(a => a[1].y)
@@ -1052,7 +1052,7 @@ function calcFootworkRhythm(frames: FrameData[], phases: PhaseInfo, fps: number)
 
   // Confidence check
   const conf = avgKpConf(frames, Math.max(0, plant - Math.floor(fps * 2.5)), plant, [L_ANKLE, R_ANKLE])
-  if (conf < 0.2) return [0, 0]
+  if (conf < 0.1) return [0, 0]
 
   // Collect per-side ankle Y positions for plant detection
   const searchStart = Math.max(0, plant - Math.floor(fps * 2.5))
@@ -1127,7 +1127,7 @@ function calcArmsSwingBack(frames: FrameData[], phases: PhaseInfo, isLeftHanded:
 
   // Confidence check
   const conf = avgKpConf(frames, phases.approachStart, phases.plantFrame, [offShoulder, offWrist, L_HIP, R_HIP])
-  if (conf < 0.2) return [0, 0]
+  if (conf < 0.1) return [0, 0]
 
   let maxAngle = 0
   let maxWristBehind = 0
@@ -1183,7 +1183,7 @@ function calcVerticalJumpConversion(frames: FrameData[], phases: PhaseInfo, fps:
   if (peak <= plant) return [0, 0]
 
   const conf = avgKpConf(frames, plant, peak, [L_HIP, R_HIP])
-  if (conf < 0.2) return [0, 0]
+  if (conf < 0.1) return [0, 0]
 
   const personHeight = phases.personHeight
   if (personHeight < 50) return [0, 0]
@@ -1238,7 +1238,7 @@ function calcHipShoulderRotation(frames: FrameData[], phases: PhaseInfo): [numbe
     }
   }
 
-  if (bestFrame < 0 || bestDetConf < 0.25) return [0, 0]
+  if (bestFrame < 0 || bestDetConf < 0.15) return [0, 0]
 
   const fkp = frames[bestFrame].keypoints
   const sAngle = angleOfLine(fkp[L_SHOULDER], fkp[R_SHOULDER])
@@ -1527,7 +1527,7 @@ function calcArmSwingSpeed(frames: FrameData[], phases: PhaseInfo, isLeftHanded:
 
   // Confidence check
   const conf = avgKpConf(frames, swingStart, swingEnd, [hitW])
-  if (conf < 0.2) return [0, 0]
+  if (conf < 0.1) return [0, 0]
 
   const speeds: number[] = [0]
   for (let i = swingStart + 1; i <= swingEnd; i++) {
@@ -1789,7 +1789,7 @@ function calcLandingBalance(frames: FrameData[], phases: PhaseInfo): [number, nu
   const kp = frames[landingFrame].keypoints
 
   // Minimum confidence check for landing analysis
-  if (!kpConf(kp, [L_KNEE, R_KNEE, L_ANKLE, R_ANKLE, L_HIP, R_HIP], 0.2)) return [0, 0]
+  if (!kpConf(kp, [L_KNEE, R_KNEE, L_ANKLE, R_ANKLE, L_HIP, R_HIP], 0.15)) return [0, 0]
 
   let score = 0
 
@@ -2164,19 +2164,20 @@ export async function analyzeVideo(
 
   const confidence: Record<string, number> = {}
   for (const [key, range] of Object.entries(metricKpMap)) {
- const fIdxs = framesInRange(range.start, range.end)
+    const fIdxs = framesInRange(range.start, range.end)
     if (fIdxs.length === 0) {
       confidence[key] = 10
     } else {
-      // If score is 0, confidence should be low
+      // If score is 0, give moderate confidence (not rock-bottom)
       if (scores[key] === 0) {
-        confidence[key] = 15
+        confidence[key] = 30
       } else {
         const kpConf = avgKpConf(framesData, range.start, range.end, range.kps)
         // Scale confidence by keypoint quality and frame count
-        const frameFactor = Math.min(1, fIdxs.length / 5)
-        const kpFactor = Math.min(1, kpConf / 0.5) // 0.5 avg conf = full confidence
-        confidence[key] = clamp(Math.round(baseConf * 0.3 + 70 * frameFactor * kpFactor))
+        // YOLOv8n-pose gives kp conf ~0.15-0.35, so calibrate for that range
+        const frameFactor = Math.min(1, fIdxs.length / 4)
+        const kpFactor = Math.min(1, kpConf / 0.3) // 0.3 avg conf = full confidence (realistic for nano model)
+        confidence[key] = clamp(Math.round(baseConf * 0.5 + 80 * frameFactor * kpFactor))
       }
     }
   }
